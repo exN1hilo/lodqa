@@ -244,3 +244,85 @@ def dp_solve(
         key=lambda solution: solution_key(solution)[1:],
     )
     return Solution(best.choice, best.value, best.used, "dp")
+
+
+def greedy_solve(
+    v: NDArray[np.float64],
+    dw: NDArray[np.int64],
+    dW: int,
+) -> Solution:
+    """Greedy upgrades from the lowest LOD by marginal utility per budget unit.
+
+    Starting from current = [M-1] * N, an upgrade (i, j) with j < current[i] is a
+    candidate if ddv > 0 and used + ddw <= dW. Free upgrades (ddw <= 0) are applied
+    first; otherwise the maximal ddv / ddw wins. Ties at both steps: larger ddv,
+    then smaller i, then smaller j.
+    """
+    utility, weights = _validate_problem(v, dw, dW)
+    n_objects, n_lods = utility.shape
+    current = [n_lods - 1] * n_objects
+    used = 0
+
+    while True:
+        free: tuple[float, int, int, int] | None = None
+        paid: tuple[float, float, int, int, int] | None = None
+        for i in range(n_objects):
+            for j in range(current[i]):
+                ddv = float(utility[i, j] - utility[i, current[i]])
+                ddw = int(weights[i, j] - weights[i, current[i]])
+                if ddv <= 0 or used + ddw > dW:
+                    continue
+                if ddw <= 0:
+                    key_free = (ddv, -i, -j, ddw)
+                    if free is None or key_free[:3] > free[:3]:
+                        free = key_free
+                else:
+                    key_paid = (ddv / ddw, ddv, -i, -j, ddw)
+                    if paid is None or key_paid[:4] > paid[:4]:
+                        paid = key_paid
+        if free is not None:
+            _, neg_i, neg_j, ddw = free
+        elif paid is not None:
+            _, _, neg_i, neg_j, ddw = paid
+        else:
+            break
+        current[-neg_i] = -neg_j
+        used += ddw
+
+    solution = evaluate_choice(tuple(current), utility, weights, dW)
+    assert solution is not None
+    return Solution(solution.choice, solution.value, solution.used, "greedy")
+
+
+def random_solve(
+    v: NDArray[np.float64],
+    dw: NDArray[np.int64],
+    dW: int,
+    n_samples: int = 100,
+    seed: int = 0,
+) -> Solution:
+    """Best feasible of n_samples uniform random choices by solution_key; all LOD M-1 if none."""
+    utility, weights = _validate_problem(v, dw, dW)
+    if n_samples < 0:
+        raise ValueError("n_samples must be non-negative")
+    n_objects, n_lods = utility.shape
+    rng = np.random.default_rng(seed)
+
+    best: Solution | None = None
+    for _ in range(n_samples):
+        choice = tuple(int(j) for j in rng.integers(0, n_lods, n_objects))
+        candidate = evaluate_choice(choice, utility, weights, dW)
+        if candidate is not None and (best is None or solution_key(candidate) < solution_key(best)):
+            best = candidate
+    if best is None:
+        best = evaluate_choice((n_lods - 1,) * n_objects, utility, weights, dW)
+        if best is None:
+            raise ValueError("lowest-LOD choice exceeds the budget")
+    return Solution(best.choice, best.value, best.used, "random")
+
+
+def approximation_ratio(sol: Solution, opt: Solution) -> float:
+    """sol.value / opt.value; opt.value must be positive."""
+    if opt.value <= 0:
+        raise ValueError("opt.value must be positive")
+    return sol.value / opt.value

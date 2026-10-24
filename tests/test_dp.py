@@ -1,4 +1,5 @@
 import timeit
+from collections.abc import Callable
 
 import numpy as np
 import pytest
@@ -6,15 +7,7 @@ import pytest
 from lodq.classical import brute_force, dp_solve
 from lodq.metrics import Problem
 
-
-def _random_problem(seed: int) -> tuple[np.ndarray, np.ndarray, int]:
-    rng = np.random.default_rng(seed)
-    n_objects, n_lods = 5, 3
-    utility = -np.sort(-rng.random((n_objects, n_lods)), axis=1)
-    weights = np.zeros((n_objects, n_lods), dtype=np.int64)
-    weights[:, :-1] = -np.sort(-rng.integers(0, 9, size=(n_objects, n_lods - 1)), axis=1)
-    budget = int(rng.integers(0, 16))
-    return utility, weights, budget
+RandomProblem = Callable[[int], tuple[np.ndarray, np.ndarray, int]]
 
 
 def test_dp_matches_brute_force_on_trap(trap: Problem) -> None:
@@ -26,8 +19,8 @@ def test_dp_matches_brute_force_on_trap(trap: Problem) -> None:
 
 
 @pytest.mark.parametrize("seed", range(300))
-def test_dp_matches_brute_force_on_random_problems(seed: int) -> None:
-    utility, weights, budget = _random_problem(seed)
+def test_dp_matches_brute_force_on_random_problems(seed: int, random_problem: RandomProblem) -> None:
+    utility, weights, budget = random_problem(seed)
 
     solution = dp_solve(utility, weights, budget)
     expected = brute_force(utility, weights, budget)
@@ -38,8 +31,8 @@ def test_dp_matches_brute_force_on_random_problems(seed: int) -> None:
     assert solution.used <= budget
 
 
-def test_dp_solve_is_fast_on_5x3() -> None:
-    utility, weights, _ = _random_problem(0)
+def test_dp_solve_is_fast_on_5x3(random_problem: RandomProblem) -> None:
+    utility, weights, _ = random_problem(0)
     budget = 15
     repeats = 200
 
