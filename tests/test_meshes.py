@@ -340,10 +340,7 @@ def test_offline_pipeline(tmp_path: Path) -> None:
 
 @pytest.fixture(scope="module")
 def meshes() -> dict[str, pv.PolyData]:
-    try:
-        return base_meshes()
-    except OSError as err:
-        pytest.skip(f"не удалось скачать меши: {err}")
+    return base_meshes()
 
 
 def test_base_meshes_match_default_scene(meshes: dict[str, pv.PolyData]) -> None:
