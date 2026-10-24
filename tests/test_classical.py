@@ -1,7 +1,15 @@
 import numpy as np
 import pytest
 
-from lodq.classical import Solution, _dp_table, brute_force, enumerate_feasible, evaluate_choice
+from lodq.classical import (
+    Solution,
+    _dp_table,
+    brute_force,
+    dp_solve,
+    enumerate_feasible,
+    evaluate_choice,
+    solution_key,
+)
 from lodq.metrics import toy_trap_problem
 
 
@@ -118,3 +126,56 @@ def test_evaluate_choice_rejects_invalid_choices(
 
     with pytest.raises(ValueError, match=message):
         evaluate_choice(choice, problem.v, problem.dw, problem.dW)
+
+
+def test_dp_solve_trap_fixture() -> None:
+    problem = toy_trap_problem()
+
+    solution = dp_solve(problem.v, problem.dw, problem.dW)
+
+    assert solution.choice == (2, 0, 0, 2, 2)
+    assert solution.value == pytest.approx(1.47)
+    assert solution.used == 10
+    assert solution.solver == "dp"
+
+
+def test_dp_solve_lexicographic_tie_beats_pointer_backtrack() -> None:
+    utility = np.array([[1.0, 2.0], [1.0, 2.0]])
+    weights = np.array([[0, 1], [0, 1]], dtype=np.int64)
+
+    solution = dp_solve(utility, weights, 1)
+
+    assert solution.choice == brute_force(utility, weights, 1).choice == (0, 1)
+
+
+def test_dp_solve_prefers_smaller_used() -> None:
+    utility = np.ones((2, 2))
+    weights = np.array([[1, 0], [0, 0]], dtype=np.int64)
+
+    solution = dp_solve(utility, weights, 1)
+
+    assert (solution.choice, solution.used) == ((1, 0), 0)
+
+
+def test_dp_solve_raises_when_infeasible() -> None:
+    weights = np.array([[2, 1], [1, 1]], dtype=np.int64)
+
+    with pytest.raises(ValueError, match="no feasible"):
+        dp_solve(np.ones((2, 2)), weights, 1)
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_dp_solve_matches_brute_force(seed: int) -> None:
+    rng = np.random.default_rng(seed)
+    n_objects = int(rng.integers(1, 6))
+    n_lods = int(rng.integers(1, 4))
+    utility = rng.integers(0, 4, size=(n_objects, n_lods)).astype(np.float64) / 4
+    weights = rng.integers(0, 5, size=(n_objects, n_lods)).astype(np.int64)
+    weights[:, -1] = 0
+    budget = int(rng.integers(0, 12))
+
+    solution = dp_solve(utility, weights, budget)
+    expected = brute_force(utility, weights, budget)
+
+    assert solution_key(solution)[1:] == solution_key(expected)[1:]
+    assert solution.value == pytest.approx(expected.value, abs=1e-12)
