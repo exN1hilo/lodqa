@@ -122,3 +122,86 @@ def evaluate_counts(
         amplification=p_opt / p_opt_random,
         n_unique=n_unique,
     )
+
+
+def _best_index(
+    levels: np.ndarray, values: np.ndarray, used: np.ndarray, primary: np.ndarray
+) -> int:
+    """Index of the minimum key ``(primary, -value, used, choice)``."""
+    keys: list[np.ndarray] = [levels[:, column] for column in range(levels.shape[1] - 1, -1, -1)]
+    keys.extend((used, -values, primary))
+    return int(np.lexsort(tuple(keys))[0])
+
+
+def evaluate_probabilities(
+    probs: np.ndarray,
+    qubo: Qubo,
+    v: np.ndarray,
+    dw: np.ndarray,
+    dp_solution: Solution,
+    p_opt_random: float,
+) -> Metrics:
+    """Same metrics as ``evaluate_counts`` for an exact distribution over all ``2^n`` states.
+
+    Index ``k`` is a basis state and bit ``q`` of ``k`` is qubit ``q``. ``shots`` is 0.
+    ``ar_top1`` uses the feasible state with the largest probability. States with
+    probability 0 are not samples. With no feasible probability mass every ``ar_*`` is 0.
+    """
+    distribution = np.asarray(probs, dtype=np.float64)
+    n_states = 1 << qubo.n
+    if distribution.shape != (n_states,):
+        raise ValueError(f"probs must have shape ({n_states},), got {distribution.shape}")
+
+    total = float(distribution.sum())
+    positive = distribution > 0
+    n_unique = int(np.count_nonzero(positive))
+    if total == 0.0 or n_unique == 0:
+        return Metrics(0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, n_unique)
+
+    states = np.arange(n_states, dtype=np.uint32)
+    choice_width = qubo.N * qubo.M
+    shifts = np.arange(choice_width, dtype=np.uint32)
+    blocks = ((states[:, None] >> shifts) & 1).reshape(n_states, qubo.N, qubo.M)
+    onehot = np.all(blocks.sum(axis=2) == 1, axis=1)
+    levels = blocks.argmax(axis=2)
+    rows = np.arange(qubo.N)
+    utility = np.asarray(v, dtype=np.float64)
+    weights = np.asarray(dw)
+    used = weights[rows[None, :], levels].sum(axis=1)
+    values = utility[rows[None, :], levels].sum(axis=1)
+    weights_mass = distribution / total
+    optimal = onehot & np.all(levels == np.asarray(dp_solution.choice), axis=1)
+    feasible = onehot & (used <= qubo.dW) & positive
+
+    p_onehot = float(weights_mass[onehot].sum())
+    p_feas = float(weights_mass[feasible].sum())
+    p_opt = float(weights_mass[optimal].sum())
+
+    if not np.any(feasible) or dp_solution.value == 0:
+        ar_best = ar_top1 = ar_mean_feasible = 0.0
+        budget_util_best = 0.0
+    else:
+        chosen = np.flatnonzero(feasible)
+        subset_levels = levels[chosen]
+        subset_values = values[chosen]
+        subset_used = used[chosen]
+        best = chosen[_best_index(subset_levels, subset_values, subset_used, -subset_values)]
+        top = chosen[_best_index(subset_levels, subset_values, subset_used, -weights_mass[chosen])]
+        ar_best = float(values[best]) / dp_solution.value
+        ar_top1 = float(values[top]) / dp_solution.value
+        ar_mean_feasible = float(np.average(values[chosen], weights=weights_mass[chosen]))
+        ar_mean_feasible /= dp_solution.value
+        budget_util_best = float(used[best]) / qubo.dW if qubo.dW else 0.0
+
+    return Metrics(
+        shots=0,
+        p_feas=p_feas,
+        p_onehot=p_onehot,
+        p_opt=p_opt,
+        ar_best=ar_best,
+        ar_top1=ar_top1,
+        ar_mean_feasible=ar_mean_feasible,
+        budget_util_best=budget_util_best,
+        amplification=p_opt / p_opt_random,
+        n_unique=n_unique,
+    )
