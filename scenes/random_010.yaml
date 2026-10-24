@@ -1,0 +1,74 @@
+name: random_010
+budget_W: 69988
+block_size: 5000
+camera:
+  position:
+  - 0.0
+  - 2.0
+  - -5.0
+  target:
+  - 0.0
+  - 0.0
+  - 10.0
+  fov_deg: 60.0
+objects:
+- name: obj0
+  position:
+  - -4.872944228261595
+  - 4.348422590654874
+  - 19.698570787717284
+  radius: 2.8335961771289533
+  importance: 1.0
+  tri_counts:
+  - 49283
+  - 19713
+  - 4928
+  mesh_paths: null
+- name: obj1
+  position:
+  - 4.43536197725
+  - -9.243720718677864
+  - -3.9573083893961885
+  radius: 0.8624867373405682
+  importance: 1.0
+  tri_counts:
+  - 21305
+  - 8522
+  - 2130
+  mesh_paths: null
+- name: obj2
+  position:
+  - -5.661497313809858
+  - -8.662396291976632
+  - 9.078267446409951
+  radius: 2.363950527609844
+  importance: 1.0
+  tri_counts:
+  - 34590
+  - 13836
+  - 3459
+  mesh_paths: null
+- name: obj3
+  position:
+  - 20.59571770876015
+  - 11.859406879657048
+  - -0.17046099836424133
+  radius: 0.8483784846695559
+  importance: 1.0
+  tri_counts:
+  - 52662
+  - 21065
+  - 5266
+  mesh_paths: null
+- name: obj4
+  position:
+  - -20.95587114335406
+  - -5.48003172354404
+  - 7.10789000783744
+  radius: 2.7663218902823172
+  importance: 1.0
+  tri_counts:
+  - 42050
+  - 16820
+  - 4205
+  mesh_paths: null

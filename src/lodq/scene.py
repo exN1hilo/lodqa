@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -257,3 +258,8 @@ def camera_path(
         frame = replace(with_camera(scene, position), name=f"{scene.name}_f{index:02d}")
         frames.append(frame)
     return frames
+
+
+def scene_suite(seeds: Iterable[int], **kw: Any) -> list[Scene]:
+    """Строит сцену на каждый seed. Дополнительные аргументы уходят в random_scene."""
+    return [random_scene(seed, **kw) for seed in seeds]
