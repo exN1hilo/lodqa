@@ -67,21 +67,21 @@ def test_validate_rejects_non_decreasing_tri_counts(
     scene: Scene, tri_counts: tuple[int, ...]
 ) -> None:
     objects = (replace(scene.objects[0], tri_counts=tri_counts), *scene.objects[1:])
-    with pytest.raises(ValueError, match="bunny.*tri_counts.*строго убывать"):
+    with pytest.raises(ValueError, match="bunny.*tri_counts.*strictly decreasing"):
         validate_scene(replace(scene, objects=objects))
 
 
 @pytest.mark.parametrize("tri_counts", [(40000, 16000, 0), (40000, 16000, -1)])
 def test_validate_rejects_nonpositive_tri_counts(scene: Scene, tri_counts: tuple[int, ...]) -> None:
     objects = (replace(scene.objects[0], tri_counts=tri_counts), *scene.objects[1:])
-    with pytest.raises(ValueError, match="bunny.*tri_counts.*больше 0"):
+    with pytest.raises(ValueError, match="bunny.*tri_counts.*greater than 0"):
         validate_scene(replace(scene, objects=objects))
 
 
 @pytest.mark.parametrize("tri_counts", [(), (4000,)])
 def test_validate_rejects_too_few_lods(scene: Scene, tri_counts: tuple[int, ...]) -> None:
     objects = (replace(scene.objects[0], tri_counts=tri_counts), *scene.objects[1:])
-    with pytest.raises(ValueError, match="bunny.*LOD.*не меньше 2"):
+    with pytest.raises(ValueError, match="bunny.*LODs.*at least 2"):
         validate_scene(replace(scene, objects=objects))
 
 
@@ -91,7 +91,7 @@ def test_validate_rejects_different_lod_counts(scene: Scene) -> None:
         replace(scene.objects[1], tri_counts=(44000, 4500)),
         *scene.objects[2:],
     )
-    with pytest.raises(ValueError, match="dragon.*число LOD"):
+    with pytest.raises(ValueError, match="dragon.*number of LODs"):
         validate_scene(replace(scene, objects=objects))
 
 

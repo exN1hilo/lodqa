@@ -133,7 +133,7 @@ def test_load_config_rejects_unknown_key(tmp_path: Path) -> None:
 def test_load_config_not_a_mapping(tmp_path: Path, text: str) -> None:
     path = tmp_path / "exp.yaml"
     path.write_text(text, encoding="utf-8")
-    with pytest.raises(TypeError, match="YAML-словарь"):
+    with pytest.raises(TypeError, match="YAML mapping"):
         load_config(path)
 
 
@@ -149,7 +149,7 @@ def test_dump_config_roundtrip() -> None:
 
 
 def test_configs_dir_not_empty() -> None:
-    assert CONFIG_PATHS, f"в {CONFIGS_DIR} нет ни одного YAML-конфига"
+    assert CONFIG_PATHS, f"no YAML configs in {CONFIGS_DIR}"
 
 
 @pytest.mark.parametrize("path", CONFIG_PATHS, ids=lambda p: p.name)

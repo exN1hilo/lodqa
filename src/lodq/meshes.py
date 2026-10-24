@@ -54,12 +54,12 @@ SOURCES: dict[str, MeshSource] = {
 
 def bounding_sphere(mesh: pv.PolyData) -> tuple[np.ndarray, float]:
     if mesh.n_points == 0:
-        raise ValueError("меш пустой")
+        raise ValueError("mesh is empty")
     lo, hi = np.reshape(mesh.bounds, (3, 2)).T
     center = (lo + hi) / 2
     radius = float(np.linalg.norm(mesh.points - center, axis=1).max())
     if not radius > 0:
-        raise ValueError("меш вырожден: все точки совпадают")
+        raise ValueError("degenerate mesh: all points coincide")
     return center, radius
 
 
@@ -72,7 +72,7 @@ def normalize_mesh(mesh: pv.PolyData) -> pv.PolyData:
 
 def prepare_mesh(mesh: pv.PolyData, n_tris: int) -> pv.PolyData:
     if n_tris < 1:
-        raise ValueError(f"n_tris должен быть >= 1, получено {n_tris}")
+        raise ValueError(f"n_tris must be >= 1, got {n_tris}")
     out = mesh.triangulate().clean()
     out = pv.PolyData(out.points, faces=out.faces).clean()
     while out.n_cells < n_tris:
@@ -84,16 +84,16 @@ def prepare_mesh(mesh: pv.PolyData, n_tris: int) -> pv.PolyData:
 
 def make_lods(mesh: pv.PolyData, ratios: tuple[float, ...] = (1.0, 0.4, 0.1)) -> list[pv.PolyData]:
     if not ratios or ratios[0] != 1.0:
-        raise ValueError(f"ratios должны начинаться с 1.0 (LOD0 — оригинал), получено {ratios}")
+        raise ValueError(f"ratios must start with 1.0 (LOD0 is the original), got {ratios}")
     if any(not 0 < low < high for high, low in pairwise(ratios)):
-        raise ValueError(f"ratios должны строго убывать и быть больше 0, получено {ratios}")
+        raise ValueError(f"ratios must be strictly decreasing and positive, got {ratios}")
     return [mesh.copy()] + [mesh.decimate(1 - ratio) for ratio in ratios[1:]]
 
 
 def simplification_error(lod0: pv.PolyData, lodj: pv.PolyData) -> float:
     _, radius = bounding_sphere(lod0)
     if lodj.n_points == 0:
-        raise ValueError("меш пустой")
+        raise ValueError("mesh is empty")
     a = np.asarray(lod0.points, dtype=np.float64)
     b = np.asarray(lodj.points, dtype=np.float64)
     hausdorff = max(cKDTree(b).query(a)[0].max(), cKDTree(a).query(b)[0].max())
@@ -104,9 +104,7 @@ def load_source(name: str, source: MeshSource) -> pv.PolyData:
     try:
         mesh = source.load()
     except OSError as err:
-        warnings.warn(
-            f"{name}: меш недоступен ({err}), используется параметрическая фигура", stacklevel=2
-        )
+        warnings.warn(f"{name}: mesh unavailable ({err}), using a parametric shape", stacklevel=2)
         return source.fallback()
     return mesh.rotate_x(source.rotate_x) if source.rotate_x else mesh
 

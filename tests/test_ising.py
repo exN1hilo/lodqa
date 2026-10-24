@@ -77,7 +77,7 @@ def test_lower_triangle_ignored_like_energy() -> None:
 
 def test_rejects_wrong_q_shape() -> None:
     qubo = Qubo(Q=np.zeros((2, 2)), offset=0.0, N=1, M=3, K=0, dW=0, A=0.0, B=0.0)
-    with pytest.raises(ValueError, match="форму"):
+    with pytest.raises(ValueError, match="shape"):
         qubo_to_ising(qubo)
 
 
@@ -143,9 +143,9 @@ def test_diagonal_empty_batch(trap_qubo: Qubo) -> None:
 @pytest.mark.parametrize(
     ("op", "message"),
     [
-        (SparsePauliOp.from_list([("XZ", 1.0)]), "только из I и Z"),
-        (SparsePauliOp.from_list([("ZZZ", 1.0)]), "Z и ZZ"),
-        (SparsePauliOp.from_list([("ZI", 1.0j)]), "вещественными"),
+        (SparsePauliOp.from_list([("XZ", 1.0)]), "I and Z only"),
+        (SparsePauliOp.from_list([("ZZZ", 1.0)]), "Z and ZZ"),
+        (SparsePauliOp.from_list([("ZI", 1.0j)]), "real"),
     ],
 )
 def test_diagonal_rejects_non_ising_operators(op: SparsePauliOp, message: str) -> None:
@@ -240,7 +240,7 @@ def test_summary_of_zero_qubo() -> None:
 
 
 def test_summary_rejects_non_ising_operator() -> None:
-    with pytest.raises(ValueError, match="только из I и Z"):
+    with pytest.raises(ValueError, match="I and Z only"):
         summary(SparsePauliOp.from_list([("XZ", 1.0)]))
 
 

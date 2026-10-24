@@ -1,59 +1,103 @@
 import re
+from dataclasses import dataclass
 
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.circuit import CircuitInstruction, Parameter
 from qiskit.circuit.library import qaoa_ansatz
+from qiskit.primitives import BaseEstimatorV2, StatevectorEstimator
 from qiskit.quantum_info import SparsePauliOp
 from qiskit.transpiler import generate_preset_pass_manager
 from qiskit_aer import AerSimulator
+from qiskit_aer.primitives import EstimatorV2 as AerEstimatorV2
 
 PARAM_RE = re.compile(r"(?P<kind>[γβ])\[(?P<index>\d+)\]")
+
+
+@dataclass(frozen=True, eq=False)
+class QAOAResult:
+    p: int
+    mixer: str
+    seed: int
+    scale: float
+    gammas: np.ndarray
+    betas: np.ndarray
+    energy_history: list[float]
+    best_expectation: float
+    n_evals: int
+    wall_time_s: float
+    counts: dict[str, int]
+    backend: str
+
+    def __post_init__(self) -> None:
+        gammas = np.array(self.gammas, dtype=np.float64, copy=True)
+        betas = np.array(self.betas, dtype=np.float64, copy=True)
+        if self.p < 1 or gammas.shape != (self.p,) or betas.shape != (self.p,):
+            raise ValueError(
+                f"gammas and betas must have shape ({self.p},), got "
+                f"{gammas.shape} and {betas.shape}"
+            )
+        object.__setattr__(self, "gammas", gammas)
+        object.__setattr__(self, "betas", betas)
+        object.__setattr__(self, "energy_history", [float(e) for e in self.energy_history])
+        object.__setattr__(self, "counts", {str(k): int(c) for k, c in self.counts.items()})
+
+
+def make_estimator(backend: str = "aer", *, seed: int) -> BaseEstimatorV2:
+    if backend == "aer":
+        return AerEstimatorV2(
+            options={
+                "default_precision": 0.0,
+                "backend_options": {"method": "statevector"},
+                "run_options": {"seed_simulator": seed},
+            }
+        )
+    if backend == "statevector":
+        return StatevectorEstimator(default_precision=0.0, seed=seed)
+    raise ValueError(f"unknown backend {backend!r}: expected 'aer' or 'statevector'")
 
 
 def normalize_operator(op: SparsePauliOp) -> tuple[SparsePauliOp, float]:
     scale = float(np.abs(op.coeffs).max(initial=0.0))
     if not scale > 0:
-        raise ValueError("оператор нулевой: нормировать нечего")
+        raise ValueError("operator is zero: nothing to normalize")
     return op / scale, scale
 
 
 def build_qaoa_circuit(cost_op: SparsePauliOp, p: int) -> QuantumCircuit:
     if p < 1:
-        raise ValueError(f"p должно быть >= 1, получено {p}")
+        raise ValueError(f"p must be >= 1, got {p}")
     return qaoa_ansatz(cost_operator=cost_op, reps=p)
 
 
 def split_params(circuit: QuantumCircuit) -> tuple[list[Parameter], list[Parameter]]:
-    """Параметры γ и β схемы, найденные по именам и упорядоченные по слою.
+    """γ and β parameters of the circuit, found by name and ordered by layer.
 
-    qaoa_ansatz называет параметр слоя k (k = 0..p-1) как γ[k] у фазового оператора
-    exp(-iγ_k H_C) и β[k] у миксера exp(-iβ_k ΣX). Возвращает ([γ[0]..γ[p-1]], [β[0]..β[p-1]]).
+    qaoa_ansatz names the layer-k parameter (k = 0..p-1) γ[k] for the phase operator
+    exp(-iγ_k H_C) and β[k] for the mixer exp(-iβ_k ΣX). Returns ([γ[0]..γ[p-1]], [β[0]..β[p-1]]).
 
-    Фактический порядок circuit.parameters (Qiskit сортирует по имени, элементы вектора —
-    по индексу): β[0], β[1], ..., β[p-1], γ[0], γ[1], ..., γ[p-1]. То есть сначала все β,
-    и позиционное присваивание [γ..., β...] перепутает углы — используйте assemble_values.
+    Actual order of circuit.parameters (Qiskit sorts by name, vector elements by index):
+    β[0], β[1], ..., β[p-1], γ[0], γ[1], ..., γ[p-1]. All β come first, so positional
+    assignment of [γ..., β...] swaps the angles; use assemble_values instead.
     """
     found: dict[str, dict[int, Parameter]] = {"γ": {}, "β": {}}
     for param in circuit.parameters:
         match = PARAM_RE.fullmatch(param.name)
         if match is None:
-            raise ValueError(f"неизвестный параметр {param.name!r}: ожидаются γ[k] и β[k]")
+            raise ValueError(f"unknown parameter {param.name!r}: expected γ[k] and β[k]")
         found[match["kind"]][int(match["index"])] = param
     gammas, betas = found["γ"], found["β"]
     p = len(gammas)
     if p == 0 or sorted(gammas) != list(range(p)) or sorted(betas) != list(range(p)):
-        raise ValueError(
-            f"ожидаются γ[0..p-1] и β[0..p-1], получено {len(gammas)} γ, {len(betas)} β"
-        )
+        raise ValueError(f"expected γ[0..p-1] and β[0..p-1], got {len(gammas)} γ, {len(betas)} β")
     return [gammas[k] for k in range(p)], [betas[k] for k in range(p)]
 
 
 def assemble_values(circuit: QuantumCircuit, gammas: np.ndarray, betas: np.ndarray) -> np.ndarray:
-    """Значения параметров в порядке circuit.parameters для assign_parameters и PUB.
+    """Parameter values in circuit.parameters order, for assign_parameters and PUBs.
 
-    gammas[k] и betas[k] — углы слоя k. При порядке circuit.parameters
-    β[0..p-1], γ[0..p-1] результат равен np.concatenate((betas, gammas)).
+    gammas[k] and betas[k] are the angles of layer k. With the circuit.parameters order
+    β[0..p-1], γ[0..p-1] the result equals np.concatenate((betas, gammas)).
     """
     gamma_params, beta_params = split_params(circuit)
     gamma_values = np.asarray(gammas, dtype=np.float64)
@@ -61,8 +105,8 @@ def assemble_values(circuit: QuantumCircuit, gammas: np.ndarray, betas: np.ndarr
     p = len(gamma_params)
     if gamma_values.shape != (p,) or beta_values.shape != (p,):
         raise ValueError(
-            f"gammas и betas должны иметь форму ({p},), получено "
-            f"{gamma_values.shape} и {beta_values.shape}"
+            f"gammas and betas must have shape ({p},), got "
+            f"{gamma_values.shape} and {beta_values.shape}"
         )
     values = dict(zip(gamma_params, gamma_values, strict=True))
     values |= dict(zip(beta_params, beta_values, strict=True))

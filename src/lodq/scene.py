@@ -99,35 +99,35 @@ def validate_scene(scene: Scene) -> None:
     n_lods = len(scene.objects[0].tri_counts) if scene.objects else 0
     for obj in scene.objects:
         if not obj.radius > 0:
-            raise ValueError(f"Объект '{obj.name}': radius должен быть больше 0")
+            raise ValueError(f"Object '{obj.name}': radius must be greater than 0")
         if not obj.importance > 0:
-            raise ValueError(f"Объект '{obj.name}': importance должен быть больше 0")
+            raise ValueError(f"Object '{obj.name}': importance must be greater than 0")
         if len(obj.tri_counts) < 2:
-            raise ValueError(f"Объект '{obj.name}': число LOD должно быть не меньше 2")
+            raise ValueError(f"Object '{obj.name}': number of LODs must be at least 2")
         if len(obj.tri_counts) != n_lods:
             raise ValueError(
-                f"Объект '{obj.name}': число LOD равно {len(obj.tri_counts)}, "
-                f"ожидалось {n_lods}, как у объекта '{scene.objects[0].name}'"
+                f"Object '{obj.name}': number of LODs is {len(obj.tri_counts)}, "
+                f"expected {n_lods}, as for object '{scene.objects[0].name}'"
             )
         if any(count <= 0 for count in obj.tri_counts):
-            raise ValueError(f"Объект '{obj.name}': все значения tri_counts должны быть больше 0")
+            raise ValueError(f"Object '{obj.name}': all tri_counts must be greater than 0")
         if any(high <= low for high, low in zip(obj.tri_counts, obj.tri_counts[1:])):
-            raise ValueError(f"Объект '{obj.name}': tri_counts должны строго убывать")
+            raise ValueError(f"Object '{obj.name}': tri_counts must be strictly decreasing")
         if obj.mesh_paths is not None and len(obj.mesh_paths) != n_lods:
             raise ValueError(
-                f"Объект '{obj.name}': длина mesh_paths должна равняться числу LOD ({n_lods})"
+                f"Object '{obj.name}': length of mesh_paths must equal the number of LODs ({n_lods})"
             )
 
     minimum_budget = sum(obj.tri_counts[-1] for obj in scene.objects)
     if scene.budget_W < minimum_budget:
         raise ValueError(
-            f"Сцена '{scene.name}': budget_W ({scene.budget_W}) меньше минимального "
-            f"бюджета ({minimum_budget}); даже самые низкие LOD всех объектов не помещаются"
+            f"Scene '{scene.name}': budget_W ({scene.budget_W}) is below the minimum "
+            f"budget ({minimum_budget}); even the lowest LODs of all objects do not fit"
         )
     if not scene.block_size > 0:
-        raise ValueError(f"Сцена '{scene.name}': block_size должен быть больше 0")
+        raise ValueError(f"Scene '{scene.name}': block_size must be greater than 0")
     if not 0 < scene.camera.fov_deg < 180:
-        raise ValueError(f"Сцена '{scene.name}': fov_deg должен быть больше 0 и меньше 180")
+        raise ValueError(f"Scene '{scene.name}': fov_deg must be greater than 0 and less than 180")
 
 
 def load_scene(path: str | Path) -> Scene:
@@ -174,7 +174,7 @@ def random_scene(
     dW_range: tuple[int, int] = (8, 15),
     block_size: int = 5000,
 ) -> Scene:
-    """Случайная сцена с детерминированным seed и dW в заданном диапазоне."""
+    """Random scene with a deterministic seed and dW in the given range."""
     from lodq.metrics import delta_weights
 
     rng = np.random.default_rng(seed)
@@ -234,7 +234,7 @@ def random_scene(
             return scene
 
     raise RuntimeError(
-        f"сцена random_{seed:03d}: не удалось получить dW в диапазоне {dW_range} за 100 попыток"
+        f"scene random_{seed:03d}: could not get dW in range {dW_range} in 100 attempts"
     )
 
 
@@ -244,9 +244,9 @@ def camera_path(
     start: tuple[float, float, float] = (0, 2, -5),
     end: tuple[float, float, float] = (0, 2, 20),
 ) -> list[Scene]:
-    """Линейный пролёт камеры: n_frames сцен от start до end включительно."""
+    """Linear camera fly-through: n_frames scenes from start to end inclusive."""
     if n_frames < 2:
-        raise ValueError(f"n_frames должно быть не меньше 2, получено {n_frames}")
+        raise ValueError(f"n_frames must be at least 2, got {n_frames}")
     coords = np.linspace(
         np.asarray(start, dtype=np.float64),
         np.asarray(end, dtype=np.float64),
@@ -261,5 +261,5 @@ def camera_path(
 
 
 def scene_suite(seeds: Iterable[int], **kw: Any) -> list[Scene]:
-    """Строит сцену на каждый seed. Дополнительные аргументы уходят в random_scene."""
+    """Build one scene per seed. Extra keyword arguments are passed to random_scene."""
     return [random_scene(seed, **kw) for seed in seeds]

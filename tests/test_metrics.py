@@ -78,7 +78,7 @@ def test_q_length_must_match_n_lods(scene: Scene) -> None:
 
 
 def test_delta_weights_ceil_nonnegative_and_last_lod_free() -> None:
-    # 10001 - 5000 = 5001 треугольников → ceil(5001/5000) = 2 блока.
+    # 10001 - 5000 = 5001 triangles → ceil(5001/5000) = 2 blocks.
     scene = make_scene(budget_W=5000)
     dw, d_w, w_base = delta_weights(scene)
     assert w_base == 5000
@@ -112,7 +112,7 @@ def test_default_scene_delta_weights(scene: Scene) -> None:
 
 def test_budget_below_base_is_infeasible(scene: Scene) -> None:
     w_base = sum(obj.tri_counts[-1] for obj in scene.objects)
-    with pytest.raises(ValueError, match="сцена невыполнима"):
+    with pytest.raises(ValueError, match="infeasible scene"):
         delta_weights(replace(scene, budget_W=w_base - 1))
 
 
@@ -186,7 +186,7 @@ def test_problem_rejects_bad_shape_last_column_and_budget() -> None:
     names = ("a", "b")
     Problem(v=utility, dw=dw, dW=0, W_base=0, block_size=5000, names=names)
 
-    with pytest.raises(ValueError, match="форму"):
+    with pytest.raises(ValueError, match="shape"):
         Problem(v=np.ones((2, 2)), dw=dw, dW=0, W_base=0, block_size=5000, names=names)
 
     broken = dw.copy()

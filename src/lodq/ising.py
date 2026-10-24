@@ -15,7 +15,7 @@ def qubo_to_ising(qubo: Qubo, tol: float = TOL) -> tuple[SparsePauliOp, float]:
     n = qubo.n
     Q = np.asarray(qubo.Q, dtype=np.float64)
     if Q.shape != (n, n):
-        raise ValueError(f"Q должна иметь форму ({n}, {n}), получено {Q.shape}")
+        raise ValueError(f"Q must have shape ({n}, {n}), got {Q.shape}")
 
     const = float(qubo.offset) + float(np.trace(Q)) / 2
     z = {q: -float(Q[q, q]) / 2 for q in range(n)}
@@ -34,10 +34,10 @@ def qubo_to_ising(qubo: Qubo, tol: float = TOL) -> tuple[SparsePauliOp, float]:
 
 def _coefficients(op: SparsePauliOp) -> tuple[float, np.ndarray, np.ndarray]:
     if np.any(op.paulis.x):
-        raise ValueError("оператор должен состоять только из I и Z")
+        raise ValueError("operator must consist of I and Z only")
     coeffs = np.asarray(op.coeffs)
     if np.any(np.abs(coeffs.imag) > TOL):
-        raise ValueError("коэффициенты оператора должны быть вещественными")
+        raise ValueError("operator coefficients must be real")
 
     n = op.num_qubits
     shift = 0.0
@@ -52,7 +52,7 @@ def _coefficients(op: SparsePauliOp) -> tuple[float, np.ndarray, np.ndarray]:
         elif qubits.size == 2:
             J[qubits[0], qubits[1]] += coef
         else:
-            raise ValueError(f"поддерживаются только члены Z и ZZ, получен {qubits.size}-локальный")
+            raise ValueError(f"only Z and ZZ terms are supported, got a {qubits.size}-local term")
     return shift, h, J
 
 
@@ -62,7 +62,7 @@ def ising_diagonal(op: SparsePauliOp, const: float, bits: np.ndarray) -> np.ndar
     single = values.ndim == 1
     batch = np.atleast_2d(values)
     if batch.ndim != 2 or batch.shape[1] != op.num_qubits:
-        raise ValueError(f"bits должен иметь форму (n,) или (batch, n), n = {op.num_qubits}")
+        raise ValueError(f"bits must have shape (n,) or (batch, n), n = {op.num_qubits}")
     spins = 1.0 - 2.0 * batch
     result = spins @ h + np.sum((spins @ J) * spins, axis=1) + shift + const
     return float(result[0]) if single else result
@@ -89,7 +89,7 @@ def main() -> None:
     problems = {"trap": toy_trap_problem()}
     for path in sorted(Path("scenes").glob("*.yaml")):
         problems[path.stem] = problem_from_scene(load_scene(path))
-    print(f"{'сцена':12s} {'dW':>3s} {'n':>3s} {'Z':>3s} {'ZZ':>4s} {'max|coef|':>10s}")
+    print(f"{'scene':12s} {'dW':>3s} {'n':>3s} {'Z':>3s} {'ZZ':>4s} {'max|coef|':>10s}")
     for name, problem in problems.items():
         op, _ = qubo_to_ising(_safe_qubo(problem))
         info = summary(op)

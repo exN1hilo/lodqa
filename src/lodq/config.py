@@ -31,7 +31,7 @@ class ExperimentConfig(BaseModel):
 def load_config(path: str | Path) -> ExperimentConfig:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        raise TypeError(f"{path}: ожидается YAML-словарь с полями ExperimentConfig")
+        raise TypeError(f"{path}: expected a YAML mapping with ExperimentConfig fields")
     return ExperimentConfig.model_validate(data)
 
 

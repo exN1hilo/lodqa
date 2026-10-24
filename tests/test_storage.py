@@ -136,7 +136,7 @@ def test_unserializable_leaves_no_dir(tmp_path: Path) -> None:
 
 
 def test_object_array_rejected(tmp_path: Path) -> None:
-    with pytest.raises(TypeError, match="числовым"):
+    with pytest.raises(TypeError, match="numeric"):
         save_run({"bad_array": [1, "a"]}, "bad", root=tmp_path)
 
 
