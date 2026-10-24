@@ -1,0 +1,61 @@
+import os
+
+import streamlit as st
+
+from lodq.demo import (
+    LIVE_P,
+    budget_range,
+    classical_record,
+    live_record,
+    load_frames,
+    scene_frames,
+)
+
+FRAMES_DIR = os.environ.get("LODQ_FRAMES_DIR", "cache/path")
+LIVE_BACKEND = os.environ.get("LODQ_LIVE_BACKEND", "aer")
+
+st.set_page_config(page_title="LOD QAOA demo", layout="wide")
+st.title("LOD selection: DP vs Greedy vs QAOA")
+
+frames_by_scene = scene_frames(load_frames(FRAMES_DIR))
+if not frames_by_scene:
+    st.info(f"No precomputed frames in {FRAMES_DIR}. Run `make precompute` first.")
+    st.stop()
+
+with st.sidebar:
+    scene_name = st.selectbox("Scene", sorted(frames_by_scene))
+    frames = frames_by_scene[scene_name]
+    index = st.slider("Camera frame", 0, len(frames) - 1, 0)
+    cached = frames[index]
+    low, high, step = budget_range(cached)
+    budget = st.slider(
+        "Triangle budget", low, high, int(cached["budget_W"]), step=step, key="budget"
+    )
+    budget_changed = budget != int(cached["budget_W"])
+    run_live = st.button(
+        f"Run QAOA live (p = {LIVE_P})",
+        disabled=not budget_changed,
+        help="Available when the budget differs from the precomputed frame.",
+    )
+
+live_key = (scene_name, index, budget)
+live_results = st.session_state.setdefault("live", {})
+if run_live:
+    with st.spinner("Running QAOA..."):
+        live_results[live_key] = live_record(cached, budget, backend=LIVE_BACKEND)
+
+if not budget_changed:
+    record, source = cached, f"precomputed, p = {cached['qaoa']['p']}"
+elif live_key in live_results:
+    record = live_results[live_key]
+    source = f"live, p = {LIVE_P}, {record['timings']['frame_s']:.1f} s"
+else:
+    record = classical_record(cached, budget)
+    source = "not computed for this budget, press the button"
+
+x, y, z = cached["camera_position"]
+st.caption(
+    f"Frame {index} of {len(frames) - 1} · camera ({x:.1f}, {y:.1f}, {z:.1f}) · "
+    f"budget {budget:,} triangles (dW = {record['problem']['dW']}) · QAOA: {source}"
+)
+st.session_state["record"] = record

@@ -1,5 +1,6 @@
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -14,11 +15,15 @@ from lodq.evaluate import (
 from lodq.fastsim import probabilities, qaoa_state
 from lodq.metrics import Problem, problem_from_scene
 from lodq.qaoa import QAOAResult, run_qaoa, run_qaoa_sweep
-from lodq.qubo import build_qubo, calibrate_penalties, verify_qubo
+from lodq.qubo import build_qubo, calibrate_penalties, default_penalties, verify_qubo
 from lodq.scene import Scene, load_scene, with_camera
 from lodq.storage import NumpyEncoder
 
 Position = tuple[float, float, float]
+BUDGET_SPREAD = 0.3
+BUDGET_STEP = 1000
+LIVE_P = 1
+LIVE_MAXITER = 25
 
 
 def load_path(path_json: str | Path) -> tuple[str, list[Position]]:
@@ -43,6 +48,35 @@ def _solution_dict(solution: Solution) -> dict[str, Any]:
     return {"choice": list(solution.choice), "value": solution.value, "used": solution.used}
 
 
+def _classical_part(
+    index: int,
+    scene: Scene,
+    scene_path: str | Path,
+    frame: Scene,
+    problem: Problem,
+    dp: Solution,
+    greedy: Solution,
+) -> dict[str, Any]:
+    return {
+        "frame": index,
+        "scene": scene.name,
+        "scene_path": Path(scene_path).as_posix(),
+        "camera_position": list(frame.camera.position),
+        "budget_W": scene.budget_W,
+        "problem": {
+            "v": problem.v,
+            "dw": problem.dw,
+            "dW": problem.dW,
+            "W_base": problem.W_base,
+            "block_size": problem.block_size,
+            "names": list(problem.names),
+        },
+        "dp": _solution_dict(dp),
+        "greedy": _solution_dict(greedy),
+        "ar_greedy": greedy.value / dp.value,
+    }
+
+
 def frame_record(
     index: int,
     scene: Scene,
@@ -65,23 +99,7 @@ def frame_record(
         metrics_exact = evaluate_probabilities(
             distribution, qubo, problem.v, problem.dw, dp, baseline
         ).to_dict()
-    return {
-        "frame": index,
-        "scene": scene.name,
-        "scene_path": Path(scene_path).as_posix(),
-        "camera_position": list(frame.camera.position),
-        "budget_W": scene.budget_W,
-        "problem": {
-            "v": problem.v,
-            "dw": problem.dw,
-            "dW": problem.dW,
-            "W_base": problem.W_base,
-            "block_size": problem.block_size,
-            "names": list(problem.names),
-        },
-        "dp": _solution_dict(dp),
-        "greedy": _solution_dict(greedy),
-        "ar_greedy": greedy.value / dp.value,
+    return _classical_part(index, scene, scene_path, frame, problem, dp, greedy) | {
         "penalties": {"A": A, "B": B, "recalibrated": recalibrated},
         "qaoa": result.to_dict(),
         "metrics": metrics.to_dict(),
@@ -154,3 +172,69 @@ def load_frames(out_dir: str | Path = "cache/path") -> list[dict[str, Any]]:
         return []
     frames = [json.loads(path.read_text(encoding="utf-8")) for path in root.glob("frame_*.json")]
     return sorted(frames, key=lambda record: int(record["frame"]))
+
+
+def scene_frames(frames: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in frames:
+        grouped.setdefault(str(record["scene"]), []).append(record)
+    return {name: sorted(items, key=lambda r: int(r["frame"])) for name, items in grouped.items()}
+
+
+def budget_range(record: dict[str, Any], spread: float = BUDGET_SPREAD) -> tuple[int, int, int]:
+    budget = int(record["budget_W"])
+    problem = record["problem"]
+    steps = int(spread * budget) // BUDGET_STEP
+    low = budget - steps * BUDGET_STEP
+    while low < int(problem["W_base"]):
+        low += BUDGET_STEP
+    return low, budget + steps * BUDGET_STEP, BUDGET_STEP
+
+
+def frame_scene(record: dict[str, Any], budget_W: int | None = None) -> Scene:
+    scene = load_scene(record["scene_path"])
+    frame = with_camera(scene, tuple(float(x) for x in record["camera_position"]))
+    return frame if budget_W is None else replace(frame, budget_W=int(budget_W))
+
+
+def classical_record(record: dict[str, Any], budget_W: int) -> dict[str, Any]:
+    frame = frame_scene(record, budget_W)
+    problem = problem_from_scene(frame)
+    dp = dp_solve(problem.v, problem.dw, problem.dW)
+    greedy = greedy_solve(problem.v, problem.dw, problem.dW)
+    part = _classical_part(
+        int(record["frame"]), frame, record["scene_path"], frame, problem, dp, greedy
+    )
+    empty = {"penalties": None, "qaoa": None, "metrics": None, "metrics_exact": None}
+    return json.loads(json.dumps(part | empty | {"random": None, "top10": []}, cls=NumpyEncoder))
+
+
+def live_record(
+    record: dict[str, Any],
+    budget_W: int,
+    seed: int = 0,
+    backend: str = "aer",
+    maxiter: int = LIVE_MAXITER,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    frame = frame_scene(record, budget_W)
+    problem = problem_from_scene(frame)
+    dp = dp_solve(problem.v, problem.dw, problem.dW)
+    greedy = greedy_solve(problem.v, problem.dw, problem.dW)
+    A, B = default_penalties(problem.v)
+    qubo = build_qubo(problem.v, problem.dw, problem.dW, A, B)
+    result = run_qaoa(qubo, LIVE_P, seed, n_starts=1, maxiter=maxiter, backend=backend)
+    live = frame_record(
+        int(record["frame"]),
+        frame,
+        record["scene_path"],
+        frame,
+        problem,
+        dp,
+        greedy,
+        (A, B, False),
+        result,
+        exact=False,
+    )
+    live["timings"] = {"frame_s": time.perf_counter() - started}
+    return json.loads(json.dumps(live, cls=NumpyEncoder))
