@@ -1,5 +1,6 @@
 import warnings
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, asdict
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -20,18 +21,33 @@ from lodq.qaoa import (
     make_estimator,
     normalize_operator,
     random_init,
+    run_qaoa,
     toy_problem,
     transpile_for_aer,
 )
-from lodq.qubo import build_qubo
+from lodq.qubo import Qubo, bits_from_bitstring, build_qubo, decode, is_feasible
+from lodq.storage import load_runs, save_run
+
+
+def make_toy_qubo() -> Qubo:
+    v, dw, dW = toy_problem()
+    return build_qubo(v, dw, dW, A=1.5 * v.max(), B=1.2 * (v - v[:, -1:]).max())
 
 
 @pytest.fixture
 def toy_op() -> SparsePauliOp:
-    v, dw, dW = toy_problem()
-    qubo = build_qubo(v, dw, dW, A=1.5 * v.max(), B=1.2 * (v - v[:, -1:]).max())
-    op, _ = qubo_to_ising(qubo)
+    op, _ = qubo_to_ising(make_toy_qubo())
     return normalize_operator(op)[0]
+
+
+@pytest.fixture(scope="module")
+def toy_qubo() -> Qubo:
+    return make_toy_qubo()
+
+
+@pytest.fixture(scope="module")
+def toy_result(toy_qubo: Qubo) -> QAOAResult:
+    return run_qaoa(toy_qubo, p=1, seed=0, maxiter=60)
 
 
 def make_result(**kw) -> QAOAResult:
@@ -200,7 +216,7 @@ def test_linear_ramp_init_by_hand() -> None:
     gammas, betas = linear_ramp_init(4, dt=0.8)
 
     np.testing.assert_allclose(gammas, [0.1, 0.3, 0.5, 0.7])
-    np.testing.assert_allclose(betas, [0.7, 0.5, 0.3, 0.1])
+    np.testing.assert_allclose(betas, [-0.7, -0.5, -0.3, -0.1])
 
 
 @pytest.mark.parametrize("p", [1, 2, 3, 4])
@@ -208,11 +224,13 @@ def test_linear_ramp_init_shape_and_monotonicity(p: int) -> None:
     gammas, betas = linear_ramp_init(p)
 
     assert gammas.shape == betas.shape == (p,)
+    assert np.all(gammas > 0)
+    assert np.all(betas < 0)
     assert np.all(np.diff(gammas) > 0)
-    assert np.all(np.diff(betas) < 0)
-    np.testing.assert_allclose(gammas + betas, np.full(p, 0.75))
+    assert np.all(np.diff(np.abs(betas)) < 0)
+    np.testing.assert_allclose(gammas - betas, np.full(p, 0.75))
     if p == 1:
-        np.testing.assert_allclose((gammas, betas), [[0.375], [0.375]])
+        np.testing.assert_allclose((gammas, betas), [[0.375], [-0.375]])
 
 
 @pytest.mark.parametrize(("p", "dt"), [(0, 0.75), (2, 0.0), (2, -1.0)])
@@ -226,9 +244,9 @@ def test_random_init_ranges_and_reproducibility() -> None:
 
     assert gammas.shape == betas.shape == (1000,)
     assert np.all((gammas >= 0) & (gammas <= np.pi))
-    assert np.all((betas >= 0) & (betas <= np.pi / 2))
+    assert np.all((betas >= -np.pi / 2) & (betas <= 0))
     assert gammas.max() > 3.0
-    assert betas.max() > 1.5
+    assert betas.min() < -1.5
     again = random_init(1000, np.random.default_rng(0))
     np.testing.assert_array_equal(gammas, again[0])
     np.testing.assert_array_equal(betas, again[1])
@@ -259,7 +277,7 @@ def test_interp_init_keeps_endpoints_and_constants(p: int) -> None:
     assert (new_gammas[0], new_gammas[-1]) == pytest.approx((gammas[0], gammas[-1]))
     assert (new_betas[0], new_betas[-1]) == pytest.approx((betas[0], betas[-1]))
     assert np.all(np.diff(new_gammas) >= 0)
-    assert np.all(np.diff(new_betas) <= 0)
+    assert np.all(np.diff(new_betas) >= 0)
     np.testing.assert_allclose(
         interp_init(np.full(p, 0.7), np.full(p, 0.2))[0], np.full(p + 1, 0.7)
     )
@@ -308,7 +326,7 @@ def test_initial_points_single_start() -> None:
     points = initial_points(1, n_starts=1, seed=0)
 
     assert len(points) == 1
-    np.testing.assert_allclose(points[0], [0.375, 0.375])
+    np.testing.assert_allclose(points[0], [0.375, -0.375])
 
 
 def test_initial_points_rejects_bad_arguments() -> None:
@@ -316,3 +334,91 @@ def test_initial_points_rejects_bad_arguments() -> None:
         initial_points(2, n_starts=0, seed=0)
     with pytest.raises(ValueError, match="warm_start"):
         initial_points(2, n_starts=1, seed=0, warm_start=([0.1], [0.2]))
+
+
+def test_linear_ramp_sign_starts_downhill(toy_op: SparsePauliOp) -> None:
+    circuit_t = transpile_for_aer(build_qaoa_circuit(toy_op, 1), seed=0)
+    fn = expectation_fn(circuit_t, toy_op, make_estimator("aer", seed=0))
+    gammas, betas = linear_ramp_init(1)
+
+    assert fn(np.concatenate((gammas, betas))) < fn(np.concatenate((gammas, -betas)))
+
+
+def test_run_qaoa_lowers_energy(toy_result: QAOAResult) -> None:
+    history = toy_result.energy_history
+
+    assert len(history) > 1
+    assert toy_result.best_expectation < history[0]
+    assert toy_result.best_expectation == pytest.approx(min(history), abs=1e-12)
+
+
+def test_run_qaoa_most_probable_bitstring_is_feasible(
+    toy_qubo: Qubo, toy_result: QAOAResult
+) -> None:
+    _, dw, _ = toy_problem()
+    bitstring = max(toy_result.counts, key=toy_result.counts.get)
+    bits = bits_from_bitstring(bitstring, toy_qubo.n)
+
+    assert is_feasible(bits, toy_qubo, dw)
+    assert decode(bits, toy_qubo) is not None
+
+
+def test_run_qaoa_result_fields(toy_qubo: Qubo, toy_result: QAOAResult) -> None:
+    op, _ = qubo_to_ising(toy_qubo)
+
+    assert (toy_result.p, toy_result.mixer, toy_result.seed) == (1, "x", 0)
+    assert toy_result.backend == "aer"
+    assert toy_result.scale == pytest.approx(normalize_operator(op)[1])
+    assert toy_result.gammas.shape == toy_result.betas.shape == (1,)
+    assert sum(toy_result.counts.values()) == 4096
+    assert all(len(bitstring) == toy_qubo.n for bitstring in toy_result.counts)
+    assert toy_result.n_evals >= len(toy_result.energy_history)
+    assert toy_result.wall_time_s > 0
+
+
+def test_run_qaoa_best_expectation_is_qubo_energy(toy_qubo: Qubo, toy_result: QAOAResult) -> None:
+    op, const = qubo_to_ising(toy_qubo)
+    circuit = build_qaoa_circuit(normalize_operator(op)[0], 1)
+
+    expected = exact_expectation(circuit, op, toy_result.gammas, toy_result.betas) + const
+
+    assert toy_result.best_expectation == pytest.approx(expected, abs=1e-9)
+
+
+def test_run_qaoa_is_reproducible(toy_qubo: Qubo, toy_result: QAOAResult) -> None:
+    again = run_qaoa(toy_qubo, p=1, seed=0, maxiter=60)
+
+    np.testing.assert_array_equal(again.gammas, toy_result.gammas)
+    np.testing.assert_array_equal(again.betas, toy_result.betas)
+    assert again.energy_history == toy_result.energy_history
+    assert again.counts == toy_result.counts
+
+
+def test_run_qaoa_warm_start_begins_at_given_angles(toy_qubo: Qubo, toy_result: QAOAResult) -> None:
+    warm = (toy_result.gammas, toy_result.betas)
+
+    result = run_qaoa(toy_qubo, p=1, seed=1, n_starts=1, maxiter=30, warm_start=warm)
+
+    assert result.energy_history[0] == pytest.approx(toy_result.best_expectation, abs=1e-9)
+    assert result.best_expectation <= result.energy_history[0]
+
+
+def test_run_qaoa_statevector_backend_agrees(toy_qubo: Qubo, toy_result: QAOAResult) -> None:
+    result = run_qaoa(toy_qubo, p=1, seed=0, maxiter=60, backend="statevector")
+
+    assert result.backend == "statevector"
+    assert result.best_expectation == pytest.approx(toy_result.best_expectation, abs=1e-6)
+    assert sum(result.counts.values()) == 4096
+
+
+def test_run_qaoa_serializes_with_save_run(toy_result: QAOAResult, tmp_path: Path) -> None:
+    save_run(asdict(toy_result), "toy-p1", root=tmp_path)
+
+    (run,) = load_runs(tmp_path, tag_prefix="toy")
+
+    assert run["tag"] == "toy-p1"
+    assert run["p"] == 1
+    assert run["gammas"] == pytest.approx(toy_result.gammas.tolist())
+    assert run["betas"] == pytest.approx(toy_result.betas.tolist())
+    assert run["energy_history"] == toy_result.energy_history
+    assert run["counts"] == toy_result.counts

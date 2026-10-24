@@ -7,11 +7,21 @@ import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.circuit import CircuitInstruction, Parameter
 from qiskit.circuit.library import qaoa_ansatz
-from qiskit.primitives import BaseEstimatorV2, StatevectorEstimator
+from qiskit.primitives import (
+    BaseEstimatorV2,
+    BaseSamplerV2,
+    StatevectorEstimator,
+    StatevectorSampler,
+)
 from qiskit.quantum_info import SparsePauliOp
 from qiskit.transpiler import generate_preset_pass_manager
 from qiskit_aer import AerSimulator
 from qiskit_aer.primitives import EstimatorV2 as AerEstimatorV2
+from qiskit_aer.primitives import SamplerV2 as AerSamplerV2
+from scipy.optimize import minimize
+
+from lodq.ising import qubo_to_ising
+from lodq.qubo import Qubo
 
 PARAM_RE = re.compile(r"(?P<kind>[γβ])\[(?P<index>\d+)\]")
 SLOW_EVAL_S = 0.5
@@ -57,6 +67,14 @@ def make_estimator(backend: str = "aer", *, seed: int) -> BaseEstimatorV2:
         )
     if backend == "statevector":
         return StatevectorEstimator(default_precision=0.0, seed=seed)
+    raise ValueError(f"unknown backend {backend!r}: expected 'aer' or 'statevector'")
+
+
+def make_sampler(backend: str = "aer", *, seed: int) -> BaseSamplerV2:
+    if backend == "aer":
+        return AerSamplerV2(seed=seed, options={"backend_options": {"method": "statevector"}})
+    if backend == "statevector":
+        return StatevectorSampler(seed=seed)
     raise ValueError(f"unknown backend {backend!r}: expected 'aer' or 'statevector'")
 
 
@@ -189,19 +207,24 @@ def expectation_fn(
 
 
 def linear_ramp_init(p: int, dt: float = 0.75) -> tuple[np.ndarray, np.ndarray]:
+    """Linear ramp γ_k = t_k·dt, β_k = -(1 - t_k)·dt with t_k = (k + 0.5)/p.
+
+    The mixer of qaoa_ansatz is exp(-iβ ΣX) and |+>^n is the ground state of -ΣX,
+    so the Trotterized adiabatic path from |+>^n to the ground state of H_C has β < 0.
+    """
     if p < 1:
         raise ValueError(f"p must be >= 1, got {p}")
     if not dt > 0:
         raise ValueError(f"dt must be > 0, got {dt}")
     t = (np.arange(p) + 0.5) / p
-    return t * dt, (1 - t) * dt
+    return t * dt, -(1 - t) * dt
 
 
 def random_init(p: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     if p < 1:
         raise ValueError(f"p must be >= 1, got {p}")
     gammas = rng.uniform(0.0, np.pi, p)
-    betas = rng.uniform(0.0, np.pi / 2, p)
+    betas = rng.uniform(-np.pi / 2, 0.0, p)
     return gammas, betas
 
 
@@ -245,6 +268,63 @@ def initial_points(
     for _ in range(n_starts - 1):
         points.append(np.concatenate(random_init(p, rng)))
     return points
+
+
+def sample_counts(
+    circuit: QuantumCircuit,
+    gammas: np.ndarray,
+    betas: np.ndarray,
+    shots: int,
+    sampler: BaseSamplerV2,
+    seed: int,
+) -> dict[str, int]:
+    measured = transpile_for_aer(circuit.measure_all(inplace=False), seed)
+    values = assemble_values(measured, gammas, betas)
+    result = sampler.run([(measured, values)], shots=shots).result()[0]
+    return result.data.meas.get_counts()
+
+
+def run_qaoa(
+    qubo: Qubo,
+    p: int,
+    seed: int,
+    n_starts: int = 5,
+    maxiter: int = 300,
+    shots: int = 4096,
+    warm_start: tuple[np.ndarray, np.ndarray] | None = None,
+    backend: str = "aer",
+) -> QAOAResult:
+    start = time.perf_counter()
+    op, const = qubo_to_ising(qubo)
+    cost_op, scale = normalize_operator(op)
+    circuit = build_qaoa_circuit(cost_op, p)
+    circuit_t = transpile_for_aer(circuit, seed)
+    estimator = make_estimator(backend, seed=seed)
+
+    best_fn, best_x, best_value, n_evals = None, None, np.inf, 0
+    for x0 in initial_points(p, n_starts, seed, warm_start):
+        fn = expectation_fn(circuit_t, cost_op, estimator)
+        res = minimize(fn, x0, method="COBYLA", options={"maxiter": maxiter, "rhobeg": 0.3})
+        n_evals += fn.n_evals
+        if res.fun < best_value:
+            best_fn, best_x, best_value = fn, res.x, float(res.fun)
+
+    gammas, betas = best_x[:p], best_x[p:]
+    counts = sample_counts(circuit, gammas, betas, shots, make_sampler(backend, seed=seed), seed)
+    return QAOAResult(
+        p=p,
+        mixer="x",
+        seed=seed,
+        scale=scale,
+        gammas=gammas,
+        betas=betas,
+        energy_history=[scale * value + const for value in best_fn.history],
+        best_expectation=scale * best_value + const,
+        n_evals=n_evals,
+        wall_time_s=time.perf_counter() - start,
+        counts=counts,
+        backend=backend,
+    )
 
 
 def toy_problem() -> tuple[np.ndarray, np.ndarray, int]:
