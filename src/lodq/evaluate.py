@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-from lodq.classical import Solution
+from lodq.classical import Solution, enumerate_feasible
 from lodq.qubo import Qubo, bits_from_bitstring, decode, is_feasible
 
 
@@ -205,3 +205,95 @@ def evaluate_probabilities(
         amplification=p_opt / p_opt_random,
         n_unique=n_unique,
     )
+
+
+def p_opt_random(qubo: Qubo) -> float:
+    """Uniform probability of one fixed LOD choice, including every slack string."""
+    return 2.0**qubo.K / 2.0**qubo.n
+
+
+def random_baseline(
+    qubo: Qubo,
+    v: np.ndarray,
+    dw: np.ndarray,
+    dp_solution: Solution,
+) -> Metrics:
+    """Exact metrics of the uniform distribution over all ``2^n`` bitstrings.
+
+    Every feasible choice contributes ``2^K`` strings, so ``p_opt = 2^K / 2^n``
+    and the amplification against that baseline is 1. All feasible strings are
+    equally likely, so ``ar_top1`` equals the mean feasible approximation ratio.
+    ``ar_best`` is 1 because the DP choice is in the distribution.
+    """
+    solutions = enumerate_feasible(v, dw, qubo.dW)
+    n_states = 2.0**qubo.n
+    slack_states = 2.0**qubo.K
+    if solutions and dp_solution.value:
+        mean_value = float(np.mean([solution.value for solution in solutions]))
+        ar_mean_feasible = mean_value / dp_solution.value
+        budget_util_best = dp_solution.used / qubo.dW if qubo.dW else 0.0
+    else:
+        ar_mean_feasible = 0.0
+        budget_util_best = 0.0
+    return Metrics(
+        shots=0,
+        p_feas=len(solutions) * slack_states / n_states,
+        p_onehot=(qubo.M**qubo.N) / 2.0 ** (qubo.N * qubo.M),
+        p_opt=p_opt_random(qubo),
+        ar_best=1.0,
+        ar_top1=ar_mean_feasible,
+        ar_mean_feasible=ar_mean_feasible,
+        budget_util_best=budget_util_best,
+        amplification=1.0,
+        n_unique=1 << qubo.n,
+    )
+
+
+def top_k(
+    counts: Mapping[str, int],
+    qubo: Qubo,
+    v: np.ndarray,
+    dw: np.ndarray,
+    dp_solution: Solution,
+    k: int = 10,
+) -> list[dict[str, str | float | int | bool]]:
+    """Return the ``k`` most probable bitstrings, highest probability first."""
+    utility = np.asarray(v, dtype=np.float64)
+    weights = np.asarray(dw)
+    shots = sum(int(count) for count in counts.values() if int(count) > 0)
+    rows: list[dict[str, str | float | int | bool]] = []
+    for bitstring, raw_count in counts.items():
+        count = int(raw_count)
+        if count <= 0:
+            continue
+        bits = bits_from_bitstring(bitstring, qubo.n)
+        choice = decode(bits, qubo)
+        if choice is None:
+            lod_code = "invalid"
+            value = 0.0
+            used = 0
+            optimal = False
+        else:
+            lod_code = "-".join(str(level) for level in choice)
+            value, used = _choice_stats(choice, utility, weights)
+            optimal = choice == dp_solution.choice
+        rows.append(
+            {
+                "bitstring": bitstring,
+                "lod_code": lod_code,
+                "value": value,
+                "used": used,
+                "feasible": is_feasible(bits, qubo, weights),
+                "is_optimal": optimal,
+                "prob": count / shots if shots else 0.0,
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            -float(row["prob"]),
+            -float(row["value"]),
+            int(row["used"]),
+            str(row["lod_code"]),
+        )
+    )
+    return rows[:k]
