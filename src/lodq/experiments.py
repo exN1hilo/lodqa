@@ -2,14 +2,18 @@
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 from lodq.classical import dp_solve, greedy_solve
-from lodq.config import ExperimentConfig, load_config
-from lodq.evaluate import random_baseline
+from lodq.config import ExperimentConfig, dump_config, load_config
+from lodq.evaluate import evaluate_counts, evaluate_probabilities, p_opt_random, random_baseline
+from lodq.fastsim import probabilities, qaoa_state
 from lodq.metrics import problem_from_scene
+from lodq.qaoa import QAOAResult, run_qaoa_sweep
 from lodq.qubo import (
+    Qubo,
     build_qubo,
     cache_energies,
     calibrate_penalties,
@@ -17,6 +21,7 @@ from lodq.qubo import (
     load_energies,
 )
 from lodq.scene import load_scene
+from lodq.storage import save_run
 
 
 def _penalties(name: str, problem: Any, cfg: ExperimentConfig, dp: Any) -> tuple[float, float]:
@@ -93,9 +98,84 @@ def _jobs(scenes: list[str], cfg: ExperimentConfig) -> list[tuple[str, str, int,
     ]
 
 
-def run_scene(prep: dict[str, Any], cfg: ExperimentConfig) -> None:
-    """Run QAOA for one prepared scene. Filled in by the next task."""
-    del prep, cfg
+def _qubo_for_mixer(prep: dict[str, Any], mixer: str) -> Qubo:
+    if mixer == "x":
+        return prep["qubo"]
+    problem = prep["problem"]
+    return build_qubo(problem.v, problem.dw, problem.dW, 0.0, prep["penalties"]["B"])
+
+
+def _solution_dict(solution: Any) -> dict[str, Any]:
+    return {
+        "choice": list(solution.choice),
+        "value": solution.value,
+        "used": solution.used,
+        "solver": solution.solver,
+    }
+
+
+def _save_result(
+    prep: dict[str, Any],
+    cfg: ExperimentConfig,
+    runs_root: str,
+    mixer: str,
+    qubo: Qubo,
+    result: QAOAResult,
+    started: float,
+) -> None:
+    problem = prep["problem"]
+    baseline = p_opt_random(qubo)
+    metrics = evaluate_counts(result.counts, qubo, problem.v, problem.dw, prep["dp"], baseline)
+    metrics_exact = None
+    if cfg.backend == "fastsim":
+        distribution = probabilities(qaoa_state(qubo, result.gammas, result.betas))
+        metrics_exact = evaluate_probabilities(
+            distribution, qubo, problem.v, problem.dw, prep["dp"], baseline
+        ).to_dict()
+    payload = result.to_dict()
+    payload["mixer"] = mixer
+    save_run(
+        {
+            "config": dump_config(cfg),
+            "scene": prep["name"],
+            "problem": {"v": problem.v, "dw": problem.dw, "dW": problem.dW},
+            "penalties": {"A": qubo.A, "B": qubo.B},
+            "dp": _solution_dict(prep["dp"]),
+            "greedy": _solution_dict(prep["greedy"]),
+            "random": prep["random"].to_dict(),
+            "qaoa": payload,
+            "metrics": metrics.to_dict(),
+            "metrics_exact": metrics_exact,
+            "timings": {
+                "wall_time_s": result.wall_time_s,
+                "n_evals": result.n_evals,
+                "sweep_s": time.perf_counter() - started,
+            },
+        },
+        tag=f"{prep['name']}__{mixer}__s{result.seed}__p{result.p}",
+        root=runs_root,
+    )
+
+
+def run_scene(prep: dict[str, Any], cfg: ExperimentConfig, runs_root: str) -> None:
+    """Sweep mixers, seeds, and p, then store one run record per depth."""
+    for mixer in cfg.mixers:
+        qubo = _qubo_for_mixer(prep, mixer)
+        for seed in cfg.seeds:
+            started = time.perf_counter()
+            results = run_qaoa_sweep(
+                qubo,
+                list(cfg.p_list),
+                seed,
+                n_starts=cfg.n_starts,
+                maxiter=cfg.maxiter,
+                shots=cfg.shots,
+                objective=cfg.objective,
+                cvar_alpha=cfg.cvar_alpha,
+                backend=cfg.backend,
+            )
+            for result in results:
+                _save_result(prep, cfg, runs_root, mixer, qubo, result, started)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -118,7 +198,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"runs {len(jobs)}")
         return
     for name in scenes:
-        run_scene(prepare_scene(name, cfg), cfg)
+        run_scene(prepare_scene(name, cfg), cfg, args.runs_root)
 
 
 if __name__ == "__main__":
