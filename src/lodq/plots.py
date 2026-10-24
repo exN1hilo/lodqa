@@ -1,12 +1,18 @@
 """Figures rebuilt from saved runs, without launching QAOA again."""
 
 from pathlib import Path
+from typing import Any
 
 import matplotlib
+import numpy as np
 import pandas as pd
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+from lodq.classical import Solution
+from lodq.evaluate import top_k
+from lodq.qubo import build_qubo
 
 COLORS = {
     "dp": "#3a3a3a",
@@ -220,4 +226,117 @@ def fig_amplification(df: pd.DataFrame, scene: str = "greedy_trap_1") -> plt.Fig
     ax.set_ylabel("amplification")
     ax.set_xticks(sorted(stats["p"].unique()))
     save_figure(fig, "amplification")
+    return fig
+
+
+def _qaoa(run: dict[str, Any]) -> dict[str, Any]:
+    qaoa = run.get("qaoa")
+    if isinstance(qaoa, dict):
+        return qaoa
+    return {
+        "p": run.get("qaoa.p", run.get("p")),
+        "seed": run.get("qaoa.seed", run.get("seed")),
+        "mixer": run.get("qaoa.mixer", run.get("mixer", "x")),
+        "counts": run.get("qaoa.counts", run.get("counts", {})),
+        "energy_history": run.get("qaoa.energy_history", run.get("energy_history", [])),
+        "gammas": run.get("qaoa.gammas", run.get("gammas", [])),
+        "betas": run.get("qaoa.betas", run.get("betas", [])),
+    }
+
+
+def _problem_arrays(run: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, int, float, float]:
+    problem = run["problem"]
+    penalties = run["penalties"]
+    return (
+        np.asarray(problem["v"], dtype=np.float64),
+        np.asarray(problem["dw"]),
+        int(problem["dW"]),
+        float(penalties["A"]),
+        float(penalties["B"]),
+    )
+
+
+def fig_top10(run: dict[str, Any]) -> plt.Figure:
+    """Ten most common bitstrings for one saved run."""
+    utility, weights, budget, penalty_a, penalty_b = _problem_arrays(run)
+    qubo = build_qubo(utility, weights, budget, penalty_a, penalty_b)
+    dp = run["dp"]
+    optimum = Solution(
+        tuple(dp["choice"]), float(dp["value"]), int(dp["used"]), str(dp.get("solver", "dp"))
+    )
+    rows = list(reversed(top_k(_qaoa(run)["counts"], qubo, utility, weights, optimum, k=10)))
+    leader = rows[-1]
+    title = f"The most common sample is {leader['lod_code']} with probability {float(leader['prob']):.2f}."
+    fig, ax = _new_ax(title)
+    labels = [str(row["lod_code"]) for row in rows]
+    for index, row in enumerate(rows):
+        if row["is_optimal"]:
+            color, hatch = COLORS["qaoa_x"], None
+        elif row["feasible"]:
+            color, hatch = COLORS["random"], None
+        else:
+            color, hatch = "#e8e8e8", "//"
+        ax.barh(index, float(row["prob"]), color=color, hatch=hatch, edgecolor="#666666")
+    ax.set_yticks(range(len(rows)), labels)
+    ax.set_xlabel("probability")
+    save_figure(fig, "top10")
+    return fig
+
+
+def fig_convergence(runs: list[dict[str, Any]]) -> plt.Figure:
+    """COBYLA energy history for p = 1..4 of one scene and one seed."""
+    ordered = sorted(runs, key=lambda run: int(_qaoa(run)["p"]))
+    deepest = ordered[-1]
+    history = [float(value) for value in _qaoa(deepest)["energy_history"]]
+    title = (
+        f"The p={int(_qaoa(deepest)['p'])} run reaches energy {history[-1]:.3g} "
+        f"after {len(history)} evaluations."
+    )
+    fig, ax = _new_ax(title)
+    for run in ordered:
+        qaoa = _qaoa(run)
+        values = [float(value) for value in qaoa["energy_history"]]
+        color = _mixer_color(str(qaoa.get("mixer", "x")))
+        ax.plot(range(1, len(values) + 1), values, color=color, linewidth=2)
+        label_line_end(ax, len(values), values[-1], f"p={int(qaoa['p'])}", color)
+    ax.set_xlabel("evaluation")
+    ax.set_ylabel("energy")
+    save_figure(fig, "convergence")
+    return fig
+
+
+def fig_landscape_p1(landscape_npz: str | Path, run_p1: dict[str, Any]) -> plt.Figure:
+    """Cost landscape over gamma and beta at p = 1, with the COBYLA point marked."""
+    archive = np.load(landscape_npz)
+    gamma = np.asarray(
+        archive["gamma"] if "gamma" in archive else archive["gammas"], dtype=np.float64
+    )
+    beta = np.asarray(archive["beta"] if "beta" in archive else archive["betas"], dtype=np.float64)
+    energy = np.asarray(
+        archive["energy"] if "energy" in archive else archive["L"], dtype=np.float64
+    )
+    qaoa = _qaoa(run_p1)
+    gamma_star = float(np.asarray(qaoa["gammas"], dtype=np.float64).ravel()[0])
+    beta_star = float(np.asarray(qaoa["betas"], dtype=np.float64).ravel()[0])
+    title = f"COBYLA stops at gamma={gamma_star:.2f}, beta={beta_star:.2f}."
+    fig, ax = _new_ax(title)
+    image = ax.imshow(
+        energy,
+        origin="lower",
+        aspect="auto",
+        extent=(float(beta.min()), float(beta.max()), float(gamma.min()), float(gamma.max())),
+    )
+    fig.colorbar(image, ax=ax, label="energy")
+    ax.plot(
+        beta_star,
+        gamma_star,
+        marker="o",
+        markersize=10,
+        markerfacecolor="white",
+        markeredgecolor=COLORS["qaoa_x"],
+        markeredgewidth=2,
+    )
+    ax.set_xlabel("beta")
+    ax.set_ylabel("gamma")
+    save_figure(fig, "landscape_p1")
     return fig
