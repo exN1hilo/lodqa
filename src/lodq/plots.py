@@ -1,6 +1,7 @@
 """Figures rebuilt from saved runs, without launching QAOA again."""
 
 import json
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ import matplotlib.pyplot as plt
 from lodq.classical import Solution
 from lodq.evaluate import top_k
 from lodq.qubo import build_qubo
+from lodq.storage import load_runs, runs_to_dataframe
 
 COLORS = {
     "dp": "#3a3a3a",
@@ -395,3 +397,89 @@ def fig_camera_path(path_json: str | Path, frames_dir: str | Path = "cache/path"
     ax.set_xlim(min(xs), max(xs))
     save_figure(fig, "camera_path")
     return fig
+
+
+def _note(lines: list[str], name: str, fig: plt.Figure) -> None:
+    lines.append(f"`{name}.png` — {fig.axes[0].get_title()}")
+    plt.close(fig)
+
+
+def _runs_for(
+    runs: list[dict[str, Any]], scene: str, mixer: str, depth: int | None = None
+) -> list[dict[str, Any]]:
+    chosen = []
+    for run in runs:
+        qaoa = run.get("qaoa") or {}
+        if run.get("scene") != scene or qaoa.get("mixer") != mixer:
+            continue
+        if depth is not None and int(qaoa.get("p", -1)) != depth:
+            continue
+        chosen.append(run)
+    return chosen
+
+
+def main() -> None:
+    """Rebuild every figure that has saved data and write figures/README.md."""
+    apply_style()
+    runs_root = Path("runs")
+    runs = load_runs(runs_root) if runs_root.is_dir() else []
+    summary_path = runs_root / "summary.csv"
+    raw = runs_to_dataframe(runs) if runs else pd.DataFrame()
+    if "metrics.ar_top1" in raw.columns:
+        table = raw
+    elif summary_path.is_file():
+        table = pd.read_csv(summary_path)
+    else:
+        table = raw
+    scene = "greedy_trap_1"
+    lines: list[str] = []
+    has_scene = not table.empty and "scene" in table.columns and (table["scene"] == scene).any()
+    if has_scene:
+        _note(lines, "ar_vs_p", fig_ar_vs_p(table, scene))
+        _note(lines, "feasibility", fig_feasibility(table, scene))
+        _note(lines, "amplification", fig_amplification(table, scene))
+    else:
+        warnings.warn(f"no rows for {scene}; skipping aggregate figures", stacklevel=1)
+
+    top = _runs_for(runs, scene, "x", 3)
+    if top:
+        _note(lines, "top10", fig_top10(top[0]))
+    else:
+        warnings.warn(f"no {scene} p=3 X run; skipping top10", stacklevel=1)
+
+    by_seed: dict[Any, list[dict[str, Any]]] = {}
+    for run in _runs_for(runs, scene, "x"):
+        by_seed.setdefault((run.get("qaoa") or {}).get("seed"), []).append(run)
+    history = next((group for group in by_seed.values() if group), None)
+    if history:
+        _note(lines, "convergence", fig_convergence(history))
+    else:
+        warnings.warn(f"no {scene} X energy histories; skipping convergence", stacklevel=1)
+
+    landscape = next(
+        (
+            path
+            for path in (Path("cache/landscape_p1.npz"), Path("runs/landscape_p1.npz"))
+            if path.is_file()
+        ),
+        None,
+    )
+    run_p1 = next(iter(_runs_for(runs, scene, "x", 1)), None)
+    if landscape is not None and run_p1 is not None:
+        _note(lines, "landscape_p1", fig_landscape_p1(landscape, run_p1))
+    else:
+        warnings.warn("no p=1 landscape; skipping landscape_p1", stacklevel=1)
+
+    path_json = Path("scenes/greedy_trap_path.json")
+    if path_json.is_file():
+        _note(lines, "camera_path", fig_camera_path(path_json))
+    else:
+        warnings.warn(f"missing {path_json}; skipping camera_path", stacklevel=1)
+
+    readme = Path("figures") / "README.md"
+    readme.parent.mkdir(parents=True, exist_ok=True)
+    readme.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()
