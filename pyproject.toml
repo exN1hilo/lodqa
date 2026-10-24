@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2",
     "pyvista",
     "streamlit",
+    "plotly>=7.1.0",
 ]
 
 [dependency-groups]
@@ -33,7 +34,7 @@ target-version = "py312"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 markers = [
     "slow: полный перебор и калибровка случайных сцен",
 ]

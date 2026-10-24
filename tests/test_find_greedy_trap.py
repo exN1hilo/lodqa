@@ -11,10 +11,11 @@ from lodq.classical import (
     greedy_solve,
 )
 from lodq.metrics import problem_from_scene
-from lodq.scene import load_scene
+from lodq.scene import in_view, load_scene
 from scripts.find_greedy_trap import (
     TrapCandidate,
     _candidate_scene,
+    _path_frames,
     camera_path_report,
     search_traps,
 )
@@ -105,3 +106,10 @@ def test_saved_camera_path_shows_the_greedy_gap() -> None:
     assert len(ratios) == 41
     assert min(ratios) < 0.9
     assert max(ratios) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("index", range(1, 4))
+def test_saved_trap_scenes_keep_every_object_in_view_along_the_path(index: int) -> None:
+    root = Path(__file__).resolve().parents[1] / "scenes"
+    scene = load_scene(root / f"greedy_trap_{index}.yaml")
+    assert all(in_view(frame).all() for frame in _path_frames(scene))

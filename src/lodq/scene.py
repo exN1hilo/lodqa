@@ -167,30 +167,56 @@ def _forward_basis(
     return right, up / np.linalg.norm(up), forward
 
 
+def in_view(scene: Scene) -> np.ndarray:
+    """Per object: True if its bounding sphere lies fully inside the camera's view cone.
+
+    The cone has half-angle fov/2 around the view axis, so it fits inside the frustum
+    for any aspect ratio of at least 1.
+    """
+    origin = np.asarray(scene.camera.position, dtype=np.float64)
+    _, _, forward = _forward_basis(origin, np.asarray(scene.camera.target, dtype=np.float64))
+    half = np.deg2rad(scene.camera.fov_deg) / 2.0
+    offsets = np.array([obj.position for obj in scene.objects], dtype=np.float64) - origin
+    radii = np.array([obj.radius for obj in scene.objects], dtype=np.float64)
+    distances = np.maximum(np.linalg.norm(offsets, axis=1), 1e-12)
+    angles = np.arccos(np.clip(offsets @ forward / distances, -1.0, 1.0))
+    margins = np.arcsin(np.clip(radii / distances, 0.0, 1.0))
+    return (distances > radii) & (angles + margins <= half)
+
+
 def random_scene(
     seed: int,
     n_objects: int = 5,
     n_lods: int = 3,
     dW_range: tuple[int, int] = (8, 15),
     block_size: int = 5000,
+    camera: Camera | None = None,
 ) -> Scene:
-    """Random scene with a deterministic seed and dW in the given range."""
+    """Random scene with a deterministic seed and dW in the given range.
+
+    Every object's bounding sphere lies inside the camera's view cone (see in_view).
+    """
     from lodq.metrics import delta_weights
 
     rng = np.random.default_rng(seed)
     low, high = int(dW_range[0]), int(dW_range[1])
-    origin = np.array([0.0, 2.0, -5.0])
-    target = np.array([0.0, 0.0, 10.0])
+    camera = camera or Camera(position=(0.0, 2.0, -5.0), target=(0.0, 0.0, 10.0), fov_deg=60.0)
+    origin = np.asarray(camera.position, dtype=np.float64)
+    target = np.asarray(camera.target, dtype=np.float64)
     right, up, forward = _forward_basis(origin, target)
+    half = np.deg2rad(camera.fov_deg) / 2.0
     fractions = _lod_fractions(n_lods)
     block = int(block_size)
 
     for _ in range(100):
-        cos_theta = rng.random(n_objects)
+        radii = rng.uniform(0.5, 3.0, size=n_objects)
+        # Keep the sphere at most 80% of the half-FOV wide, then aim it inside the remaining cone.
+        distances = rng.uniform(3.0, 30.0, size=n_objects)
+        distances = np.maximum(distances, radii / np.sin(0.8 * half))
+        max_theta = 0.9 * (half - np.arcsin(radii / distances))
+        cos_theta = rng.uniform(np.cos(max_theta), 1.0)
         sin_theta = np.sqrt(np.maximum(0.0, 1.0 - np.square(cos_theta)))
         phi = rng.uniform(0.0, 2.0 * np.pi, size=n_objects)
-        distances = rng.uniform(3.0, 30.0, size=n_objects)
-        radii = rng.uniform(0.5, 3.0, size=n_objects)
         lod0 = rng.integers(10_000, 60_000, size=n_objects, endpoint=True)
         direction = (
             (sin_theta * np.cos(phi))[:, None] * right
@@ -225,7 +251,7 @@ def random_scene(
         scene = Scene(
             name=f"random_{seed:03d}",
             objects=objects,
-            camera=Camera(position=(0.0, 2.0, -5.0), target=(0.0, 0.0, 10.0), fov_deg=60.0),
+            camera=camera,
             budget_W=budget_w,
             block_size=block,
         )

@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
@@ -33,6 +34,7 @@ from lodq.qubo import (
     default_penalties,
     verify_qubo,
 )
+from lodq.render import load_lod_mesh
 from lodq.scene import Scene, load_scene, with_camera
 from lodq.storage import NumpyEncoder
 
@@ -459,6 +461,140 @@ def top_view(scene: Scene, choice: tuple[int, ...] | None, method: str) -> Figur
     )
     fig.tight_layout()
     _separate_labels(fig, labels)
+    return fig
+
+
+def _frustum(scene: Scene, depth: float, aspect: float = 16 / 9) -> np.ndarray:
+    """Camera position followed by the four far corners of its view pyramid."""
+    camera = np.asarray(scene.camera.position, dtype=np.float64)
+    forward = np.asarray(scene.camera.target, dtype=np.float64) - camera
+    forward /= np.linalg.norm(forward)
+    right = np.cross(forward, (0.0, 1.0, 0.0))
+    right /= np.linalg.norm(right)
+    up = np.cross(right, forward)
+    half = np.tan(np.deg2rad(scene.camera.fov_deg) / 2)
+    corners = [
+        camera + depth * (forward + half * (sx * aspect * right + sy * up))
+        for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))
+    ]
+    return np.array([camera, *corners])
+
+
+def scene_3d(
+    scene: Scene,
+    choice: tuple[int, ...] | None,
+    method: str,
+    path: list[Position] | None = None,
+) -> go.Figure:
+    """Interactive 3D view: the LOD meshes chosen by method, the camera and its path.
+
+    Without a choice every object is drawn with its coarsest mesh in gray, as in top_view.
+    """
+    colors = lod_colors(scene.n_lods)
+    camera = np.asarray(scene.camera.position, dtype=np.float64)
+    fig = go.Figure()
+    shown_levels: set[int] = set()
+    reach = 0.0
+    for obj, level in zip(scene.objects, choice or (None,) * scene.n_objects, strict=True):
+        mesh = load_lod_mesh(obj, scene.n_lods - 1 if level is None else level).triangulate()
+        points, faces = mesh.points, mesh.faces.reshape(-1, 4)[:, 1:]
+        label = "no choice" if level is None else f"LOD{level}"
+        triangles = "" if level is None else f"<br>{obj.tri_counts[level]:,} triangles"
+        fig.add_trace(
+            go.Mesh3d(
+                x=points[:, 0],
+                y=points[:, 1],
+                z=points[:, 2],
+                i=faces[:, 0],
+                j=faces[:, 1],
+                k=faces[:, 2],
+                color="#d4d3cf" if level is None else colors[level],
+                flatshading=False,
+                lighting={"ambient": 0.45, "diffuse": 0.8, "specular": 0.15, "roughness": 0.7},
+                name=label,
+                legendgroup=label,
+                showlegend=level is not None and level not in shown_levels,
+                hovertemplate=f"{obj.name} · {label}{triangles}<extra></extra>",
+            )
+        )
+        if level is not None:
+            shown_levels.add(level)
+        reach = max(reach, float(np.linalg.norm(np.asarray(obj.position) - camera)) + obj.radius)
+
+    labels = np.array([[*obj.position] for obj in scene.objects], dtype=np.float64)
+    labels[:, 1] += [1.35 * obj.radius for obj in scene.objects]
+    fig.add_trace(
+        go.Scatter3d(
+            x=labels[:, 0],
+            y=labels[:, 1],
+            z=labels[:, 2],
+            mode="text",
+            text=[obj.name for obj in scene.objects],
+            textfont={"color": INK, "size": 12},
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+
+    if path:
+        line = np.asarray(path, dtype=np.float64)
+        fig.add_trace(
+            go.Scatter3d(
+                x=line[:, 0],
+                y=line[:, 1],
+                z=line[:, 2],
+                mode="lines",
+                line={"color": INK_SECONDARY, "width": 3, "dash": "dash"},
+                name="camera path",
+                hoverinfo="skip",
+            )
+        )
+
+    pyramid = _frustum(scene, reach)
+    edges = [0, 1, 2, 0, 3, 4, 0, 4, 1, 2, 3]
+    fig.add_trace(
+        go.Scatter3d(
+            x=pyramid[edges, 0],
+            y=pyramid[edges, 1],
+            z=pyramid[edges, 2],
+            mode="lines",
+            line={"color": INK_SECONDARY, "width": 2},
+            name="field of view",
+            hoverinfo="skip",
+        )
+    )
+    fig.add_trace(
+        go.Scatter3d(
+            x=[camera[0]],
+            y=[camera[1]],
+            z=[camera[2]],
+            mode="markers+text",
+            marker={"size": 7, "color": INK, "symbol": "diamond"},
+            text=["camera"],
+            textposition="top center",
+            textfont={"color": INK, "size": 12},
+            name="camera",
+            hovertemplate="camera (%{x:.1f}, %{y:.1f}, %{z:.1f})<extra></extra>",
+        )
+    )
+
+    axis = {"showbackground": False, "gridcolor": GRID, "zerolinecolor": GRID, "title": ""}
+    fig.update_layout(
+        title={"text": f"3D scene · {method}", "x": 0.0, "font": {"color": INK, "size": 14}},
+        paper_bgcolor=SURFACE,
+        margin={"l": 0, "r": 0, "t": 36, "b": 0},
+        height=560,
+        legend={"orientation": "h", "y": 0.0, "x": 0.0},
+        # Scene y is up; keep the viewer's rotation when the frame or method changes.
+        uirevision="scene",
+        scene={
+            "aspectmode": "data",
+            "xaxis": axis,
+            "yaxis": axis,
+            "zaxis": axis,
+            "camera": {"up": {"x": 0, "y": 1, "z": 0}, "eye": {"x": 0.9, "y": 1.1, "z": -1.4}},
+        },
+    )
     return fig
 
 

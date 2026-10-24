@@ -16,7 +16,10 @@ from lodq.classical import (
     greedy_solve,
 )
 from lodq.metrics import Problem, problem_from_scene
-from lodq.scene import Scene, camera_path, load_scene, random_scene, save_scene
+from lodq.scene import Scene, camera_path, in_view, load_scene, random_scene, save_scene
+
+PATH_FRAMES = 41
+PATH_HALF_LENGTH = 10.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,16 +43,52 @@ class TrapCandidate:
         )
 
 
+def _path_frames(scene: Scene, n_frames: int = PATH_FRAMES) -> list[Scene]:
+    """Camera pass along z through the scene camera, PATH_HALF_LENGTH to each side."""
+    x, y, z = scene.camera.position
+    return camera_path(
+        scene,
+        n_frames=n_frames,
+        start=(x, y, z - PATH_HALF_LENGTH),
+        end=(x, y, z + PATH_HALF_LENGTH),
+    )
+
+
+def _visible_on_path(scene: Scene) -> bool:
+    return all(bool(in_view(frame).all()) for frame in _path_frames(scene))
+
+
+def _greedy_recovers_on_path(scene: Scene) -> bool:
+    """True if Greedy is optimal on at least one frame, so the path shows the gap opening."""
+    for frame in _path_frames(scene):
+        problem = problem_from_scene(frame)
+        optimum = dp_solve(problem.v, problem.dw, problem.dW)
+        greedy = greedy_solve(problem.v, problem.dw, problem.dW)
+        if approximation_ratio(greedy, optimum) >= 1.0 - 1e-9:
+            return True
+    return False
+
+
 def _candidate_scene(base: Scene, seed: int, attempt: int) -> Scene:
     sample_seed = seed + 17 * attempt
+    rng = np.random.default_rng(sample_seed)
+    # The path ends PATH_HALF_LENGTH ahead, so keep its last frame short of the target.
+    camera_position = (
+        float(rng.uniform(-10.0, 10.0)),
+        base.camera.position[1],
+        float(rng.uniform(-10.0, base.camera.target[2] - PATH_HALF_LENGTH - 2.0)),
+    )
+    camera = replace(base.camera, position=camera_position)
+    # Place objects from the closest camera on the path, where the view is narrowest.
+    path_end = (camera_position[0], camera_position[1], camera_position[2] + PATH_HALF_LENGTH)
     generated = random_scene(
         sample_seed,
         n_objects=base.n_objects,
         n_lods=base.n_lods,
         dW_range=(8, 15),
         block_size=base.block_size,
+        camera=replace(camera, position=path_end),
     )
-    rng = np.random.default_rng(sample_seed)
     objects = tuple(
         replace(
             original,
@@ -63,16 +102,11 @@ def _candidate_scene(base: Scene, seed: int, attempt: int) -> Scene:
     w_base = sum(obj.tri_counts[-1] for obj in objects)
     generated_dw = problem_from_scene(generated).dW
     budget = w_base + generated_dw * base.block_size
-    camera_position = (
-        float(rng.uniform(-10.0, 10.0)),
-        base.camera.position[1],
-        float(rng.uniform(-10.0, 10.0)),
-    )
     return replace(
         base,
         name=f"greedy_trap_candidate_{attempt:04d}",
         objects=objects,
-        camera=replace(base.camera, position=camera_position),
+        camera=camera,
         budget_W=budget,
     )
 
@@ -80,6 +114,8 @@ def _candidate_scene(base: Scene, seed: int, attempt: int) -> Scene:
 def _evaluate_candidate(scene: Scene) -> TrapCandidate | None:
     problem = problem_from_scene(scene)
     if problem.n_qubits > 19 or problem.dW <= 0:
+        return None
+    if not _visible_on_path(scene):
         return None
 
     optimum = dp_solve(problem.v, problem.dw, problem.dW)
@@ -110,6 +146,8 @@ def _evaluate_candidate(scene: Scene) -> TrapCandidate | None:
     ]
     if not upgrade_costs or min(upgrade_costs) <= remaining:
         return None
+    if not _greedy_recovers_on_path(scene):
+        return None
 
     return TrapCandidate(
         scene=scene,
@@ -122,7 +160,7 @@ def _evaluate_candidate(scene: Scene) -> TrapCandidate | None:
     )
 
 
-def search_traps(base: Scene, seed: int, attempts: int = 5000) -> list[TrapCandidate]:
+def search_traps(base: Scene, seed: int, attempts: int = 50000) -> list[TrapCandidate]:
     """Return up to three distinct candidates satisfying all trap criteria."""
     if attempts < 1:
         raise ValueError("attempts must be positive")
@@ -142,15 +180,9 @@ def search_traps(base: Scene, seed: int, attempts: int = 5000) -> list[TrapCandi
     return best
 
 
-def camera_path_report(candidate: TrapCandidate, n_frames: int = 41) -> dict[str, Any]:
+def camera_path_report(candidate: TrapCandidate, n_frames: int = PATH_FRAMES) -> dict[str, Any]:
     """Evaluate the greedy approximation ratio along a camera pass through the trap."""
-    camera = candidate.scene.camera.position
-    frames = camera_path(
-        candidate.scene,
-        n_frames=n_frames,
-        start=(camera[0], camera[1], camera[2] - 10.0),
-        end=(camera[0], camera[1], camera[2] + 10.0),
-    )
+    frames = _path_frames(candidate.scene, n_frames)
     frame_results = []
     for index, frame in enumerate(frames):
         problem = problem_from_scene(frame)
@@ -197,9 +229,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Найти сцены-ловушки для Greedy")
     parser.add_argument("--scene", type=Path, default=Path("scenes/default.yaml"))
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--attempts", type=int, default=5000)
+    parser.add_argument("--attempts", type=int, default=50000)
     parser.add_argument("--out", type=Path, default=Path("scenes"))
-    parser.add_argument("--frames", type=int, default=41)
+    parser.add_argument("--frames", type=int, default=PATH_FRAMES)
     args = parser.parse_args()
     if args.seed < 0:
         parser.error("--seed must be non-negative")

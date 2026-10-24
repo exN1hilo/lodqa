@@ -38,6 +38,7 @@ from lodq.demo import (
     method_choice,
     precompute_path,
     qaoa_top_choice,
+    scene_3d,
     scene_frames,
     top10_table,
     top_view,
@@ -772,3 +773,59 @@ def test_app_picks_up_new_frames(
     at.run()
 
     assert at.sidebar.slider[0].max == 2
+
+
+def _trap_scene():
+    from lodq.scene import load_scene
+
+    return load_scene(REPO / "scenes" / "greedy_trap_1.yaml")
+
+
+def test_scene_3d_colors_meshes_by_chosen_lod() -> None:
+    scene = _trap_scene()
+    choice = (0, 1, 2, 2, 1)
+    fig = scene_3d(scene, choice, "DP", path=[(0.0, 2.0, -5.0), (1.0, 2.0, -4.0)])
+    meshes = [trace for trace in fig.data if trace.type == "mesh3d"]
+    colors = lod_colors(scene.n_lods)
+    assert [mesh.color for mesh in meshes] == [colors[level] for level in choice]
+    assert [mesh.name for mesh in meshes] == [f"LOD{level}" for level in choice]
+    assert sum(bool(mesh.showlegend) for mesh in meshes) == len(set(choice))
+    names = {trace.name for trace in fig.data}
+    assert {"camera", "camera path", "field of view"} <= names
+    camera = next(trace for trace in fig.data if trace.name == "camera")
+    assert (camera.x[0], camera.y[0], camera.z[0]) == tuple(scene.camera.position)
+    assert fig.layout.scene.camera.up.y == 1
+
+
+def test_scene_3d_finer_lod_has_more_triangles() -> None:
+    scene = _trap_scene()
+    fine = scene_3d(scene, (0,) * scene.n_objects, "DP")
+    coarse = scene_3d(scene, (scene.n_lods - 1,) * scene.n_objects, "DP")
+
+    def triangles(fig) -> list[int]:
+        return [len(trace.i) for trace in fig.data if trace.type == "mesh3d"]
+
+    assert all(f > c for f, c in zip(triangles(fine), triangles(coarse), strict=True))
+
+
+def test_scene_3d_without_choice_is_gray() -> None:
+    scene = _trap_scene()
+    fig = scene_3d(scene, None, "QAOA")
+    meshes = [trace for trace in fig.data if trace.type == "mesh3d"]
+    assert {mesh.color for mesh in meshes} == {"#d4d3cf"}
+    assert not any(mesh.showlegend for mesh in meshes)
+    assert "camera path" not in {trace.name for trace in fig.data}
+
+
+def test_app_shows_3d_scene_tab(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, _ = mini
+    at = app(out, monkeypatch)
+
+    assert not at.exception
+    assert [tab.label for tab in at.tabs] == ["3D scene", "Top view"]
+    assert len(at.get("plotly_chart")) == 1
+    at.radio(key="method").set_value("QAOA").run()
+    assert not at.exception
+    assert len(at.get("plotly_chart")) == 1

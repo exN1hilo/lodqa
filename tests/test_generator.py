@@ -1,9 +1,13 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from lodq.metrics import problem_from_scene
 from lodq.scene import (
     camera_path,
+    in_view,
+    load_scene,
     random_scene,
     scene_to_dict,
     validate_scene,
@@ -65,3 +69,17 @@ def test_random_scene_places_objects_in_front_of_camera() -> None:
         assert 10_000 <= lod0 <= 60_000
         assert lod1 == round(lod0 * 0.4)
         assert lod2 == round(lod0 * 0.1)
+
+
+def test_random_scene_keeps_every_object_in_view() -> None:
+    for seed in range(20):
+        assert in_view(random_scene(seed)).all()
+
+
+@pytest.mark.parametrize(
+    "path", sorted((Path(__file__).resolve().parents[1] / "scenes").glob("*.yaml")), ids=str
+)
+def test_saved_scene_keeps_every_object_in_view(path: Path) -> None:
+    scene = load_scene(path)
+    hidden = [obj.name for obj, seen in zip(scene.objects, in_view(scene), strict=True) if not seen]
+    assert not hidden

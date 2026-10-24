@@ -20,6 +20,7 @@ from lodq.demo import (
     live_record,
     load_frames,
     method_choice,
+    scene_3d,
     scene_frames,
     top10_table,
     top_view,
@@ -52,6 +53,14 @@ def cached_classical(key: Key, _cached: dict[str, Any]) -> dict[str, Any]:
 def cached_top_view(key: Key, method: str, _record: dict[str, Any]) -> bytes:
     scene = frame_scene(_record, _record["budget_W"])
     return figure_png(top_view(scene, method_choice(_record, method), method))
+
+
+@st.cache_data(show_spinner=False, max_entries=256)
+def cached_scene_3d(
+    key: Key, method: str, _record: dict[str, Any], _path: list[tuple[float, ...]]
+) -> Any:
+    scene = frame_scene(_record, _record["budget_W"])
+    return scene_3d(scene, method_choice(_record, method), method, _path)
 
 
 @st.cache_data(show_spinner=False, max_entries=512)
@@ -134,11 +143,17 @@ def main() -> None:
             not_run = record["qaoa"] is None
             reason = "QAOA was not run for this budget" if not_run else "no feasible QAOA sample"
             st.caption(f"{method}: {reason}, objects are shown in gray.")
-        st.image(
-            cached_top_view(key, method, record),
-            width="stretch",
-            alt=f"Top view of the scene with the LOD chosen by {method}",
-        )
+        tab_3d, tab_top = st.tabs(["3D scene", "Top view"])
+        with tab_3d:
+            path = [tuple(frame["camera_position"]) for frame in frames]
+            st.plotly_chart(cached_scene_3d(key, method, record, path), width="stretch")
+            st.caption("Drag to rotate, scroll to zoom. The dashed line is the camera path.")
+        with tab_top:
+            st.image(
+                cached_top_view(key, method, record),
+                width="stretch",
+                alt=f"Top view of the scene with the LOD chosen by {method}",
+            )
     with right:
         st.subheader("LOD choice per method")
         st.image(

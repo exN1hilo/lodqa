@@ -15,7 +15,7 @@ objects:
 - name: bunny
   position:
   - -1.0
-  - 0.0
+  - 1.0
   - -1.5
   radius: 0.8
   importance: 1.0
