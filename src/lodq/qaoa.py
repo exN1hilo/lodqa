@@ -1,5 +1,7 @@
 import re
-from dataclasses import dataclass
+import time
+import warnings
+from dataclasses import dataclass, field
 
 import numpy as np
 from qiskit import QuantumCircuit
@@ -12,6 +14,7 @@ from qiskit_aer import AerSimulator
 from qiskit_aer.primitives import EstimatorV2 as AerEstimatorV2
 
 PARAM_RE = re.compile(r"(?P<kind>[γβ])\[(?P<index>\d+)\]")
+SLOW_EVAL_S = 0.5
 
 
 @dataclass(frozen=True, eq=False)
@@ -134,6 +137,55 @@ def circuit_stats(circuit: QuantumCircuit) -> dict[str, int | dict[str, int]]:
         "n_2q": sum(1 for instruction in circuit.data if _is_two_qubit(instruction)),
         "count_ops": dict(circuit.count_ops()),
     }
+
+
+@dataclass(eq=False)
+class Expectation:
+    circuit: QuantumCircuit
+    cost_op: SparsePauliOp
+    estimator: BaseEstimatorV2
+    slow_eval_s: float = SLOW_EVAL_S
+    history: list[float] = field(default_factory=list)
+    eval_times: list[float] = field(default_factory=list)
+    p: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.p = len(split_params(self.circuit)[0])
+
+    def __call__(self, x: np.ndarray) -> float:
+        angles = np.asarray(x, dtype=np.float64)
+        if angles.shape != (2 * self.p,):
+            raise ValueError(
+                f"x must have shape ({2 * self.p},) as [γ_1..γ_p, β_1..β_p], got {angles.shape}"
+            )
+        values = assemble_values(self.circuit, angles[: self.p], angles[self.p :])
+        start = time.perf_counter()
+        result = self.estimator.run([(self.circuit, self.cost_op, values)]).result()[0]
+        elapsed = time.perf_counter() - start
+        value = float(result.data.evs)
+        if elapsed > self.slow_eval_s and not any(t > self.slow_eval_s for t in self.eval_times):
+            warnings.warn(
+                f"one ⟨H⟩ evaluation on {self.circuit.num_qubits} qubits took {elapsed:.2f} s, "
+                "consider backend='fastsim'",
+                stacklevel=2,
+            )
+        self.eval_times.append(elapsed)
+        self.history.append(value)
+        return value
+
+    @property
+    def n_evals(self) -> int:
+        return len(self.history)
+
+
+def expectation_fn(
+    circuit_t: QuantumCircuit,
+    cost_op: SparsePauliOp,
+    estimator: BaseEstimatorV2,
+    slow_eval_s: float = SLOW_EVAL_S,
+) -> Expectation:
+    cost_op_t = cost_op.apply_layout(circuit_t.layout)
+    return Expectation(circuit_t, cost_op_t, estimator, slow_eval_s)
 
 
 def toy_problem() -> tuple[np.ndarray, np.ndarray, int]:
