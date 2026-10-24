@@ -1,6 +1,6 @@
 CONFIG ?= configs/main.yaml
 
-.PHONY: install test lint assets experiments figures render demo all
+.PHONY: install test lint assets experiments figures render precompute demo all
 
 install:
 	uv sync
@@ -22,6 +22,9 @@ figures:
 
 render:
 	uv run python -m lodq.render
+
+precompute:
+	uv run python scripts/precompute_path.py
 
 demo:
 	uv run streamlit run app/streamlit_app.py
