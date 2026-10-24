@@ -1,6 +1,7 @@
 import json
 import time
 from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -26,12 +27,10 @@ from lodq.metrics import Problem, problem_from_scene
 from lodq.plots import COLORS
 from lodq.qaoa import QAOAResult, run_qaoa, run_qaoa_sweep
 from lodq.qubo import (
-    bits_from_bitstring,
+    all_energies,
     build_qubo,
     calibrate_penalties,
-    decode,
     default_penalties,
-    is_feasible,
     verify_qubo,
 )
 from lodq.scene import Scene, load_scene, with_camera
@@ -41,13 +40,14 @@ Position = tuple[float, float, float]
 BUDGET_SPREAD = 0.3
 BUDGET_STEP = 1000
 LIVE_P = 1
-LIVE_MAXITER = 25
+LIVE_MAXITER = 20
 METHODS = ("Greedy", "QAOA", "DP")
 LOD_RAMP = ("#104281", "#1c5cab", "#2a78d6", "#5598e7", "#86b6ef")
 SURFACE = "#fcfcfb"
 INK = "#0b0b0b"
 INK_SECONDARY = "#52514e"
 GRID = "#e0e0e0"
+PNG_DPI = 150
 METHOD_COLORS = {"Greedy": COLORS["greedy"], "QAOA": COLORS["qaoa_x"], "DP": COLORS["dp"]}
 
 
@@ -113,6 +113,7 @@ def frame_record(
     penalties: tuple[float, float, bool],
     result: QAOAResult,
     exact: bool,
+    energies: np.ndarray | None = None,
 ) -> dict[str, Any]:
     A, B, recalibrated = penalties
     qubo = build_qubo(problem.v, problem.dw, problem.dW, A, B)
@@ -120,7 +121,9 @@ def frame_record(
     metrics = evaluate_counts(result.counts, qubo, problem.v, problem.dw, dp, baseline)
     metrics_exact = None
     if exact:
-        distribution = probabilities(qaoa_state(qubo, result.gammas, result.betas))
+        values = all_energies(qubo) if energies is None else energies
+        state = qaoa_state(values / result.scale, result.gammas, result.betas, qubo.n)
+        distribution = probabilities(state)
         metrics_exact = evaluate_probabilities(
             distribution, qubo, problem.v, problem.dw, dp, baseline
         ).to_dict()
@@ -144,7 +147,7 @@ def precompute_path(
     maxiter: int = 60,
     warm_maxiter: int = 30,
     shots: int = 4096,
-    backend: str = "aer",
+    backend: str = "fastsim",
     exact: bool = False,
 ) -> list[Path]:
     scene = load_scene(scene_path)
@@ -162,25 +165,21 @@ def precompute_path(
         frame_pen = frame_penalties(problem, dp, penalties)
         penalties = frame_pen[:2]
         qubo = build_qubo(problem.v, problem.dw, problem.dW, *penalties)
+        energies = all_energies(qubo)
+        options = {"shots": shots, "backend": backend, "energies": energies}
         if warm_start is None:
             depths = list(range(1, p + 1))
             result = run_qaoa_sweep(
-                qubo, depths, seed, n_starts=n_starts, maxiter=maxiter, shots=shots, backend=backend
-            )[-1]
+                qubo, depths, seed, n_starts=n_starts, maxiter=maxiter, **options
+            )
+            result = result[-1]
         else:
             result = run_qaoa(
-                qubo,
-                p,
-                seed,
-                n_starts=1,
-                maxiter=warm_maxiter,
-                shots=shots,
-                warm_start=warm_start,
-                backend=backend,
+                qubo, p, seed, n_starts=1, maxiter=warm_maxiter, warm_start=warm_start, **options
             )
         warm_start = (result.gammas, result.betas)
         record = frame_record(
-            index, scene, scene_path, frame, problem, dp, greedy, frame_pen, result, exact
+            index, scene, scene_path, frame, problem, dp, greedy, frame_pen, result, exact, energies
         )
         record["timings"] = {"frame_s": time.perf_counter() - started}
         path = out / f"frame_{index:02d}.json"
@@ -238,7 +237,7 @@ def live_record(
     record: dict[str, Any],
     budget_W: int,
     seed: int = 0,
-    backend: str = "aer",
+    backend: str = "fastsim",
     maxiter: int = LIVE_MAXITER,
 ) -> dict[str, Any]:
     started = time.perf_counter()
@@ -324,25 +323,34 @@ def lod_colors(n_lods: int) -> list[str]:
     return [LOD_RAMP[step] for step in steps]
 
 
+def _count_bits(counts: dict[str, int], n: int) -> tuple[np.ndarray, np.ndarray]:
+    keys = list(counts)
+    raw = np.frombuffer("".join(keys).encode("ascii"), dtype=np.uint8).reshape(len(keys), n)
+    bits = (raw[:, ::-1] - ord("0")).astype(np.int8)
+    return bits, np.fromiter(counts.values(), dtype=np.int64, count=len(keys))
+
+
 def qaoa_top_choice(record: dict[str, Any]) -> tuple[int, ...] | None:
-    if record.get("qaoa") is None:
+    if record.get("qaoa") is None or not record["qaoa"]["counts"]:
         return None
     problem = record["problem"]
     v, dw = np.asarray(problem["v"]), np.asarray(problem["dw"])
-    penalties = record["penalties"]
-    qubo = build_qubo(v, dw, int(problem["dW"]), penalties["A"], penalties["B"])
-    rows = np.arange(qubo.N)
-    best_key, best_choice = None, None
-    for bitstring, count in record["qaoa"]["counts"].items():
-        bits = bits_from_bitstring(bitstring, qubo.n)
-        if not is_feasible(bits, qubo, dw):
-            continue
-        choice = decode(bits, qubo)
-        levels = np.asarray(choice)
-        key = (-int(count), -float(v[rows, levels].sum()), int(dw[rows, levels].sum()), choice)
-        if best_key is None or key < best_key:
-            best_key, best_choice = key, choice
-    return best_choice
+    n_objects, n_lods = v.shape
+    counts = record["qaoa"]["counts"]
+    bits, shots = _count_bits(counts, len(next(iter(counts))))
+    blocks = bits[:, : n_objects * n_lods].reshape(-1, n_objects, n_lods)
+    levels = blocks.argmax(axis=2)
+    rows = np.arange(n_objects)
+    used = dw[rows, levels].sum(axis=1)
+    values = v[rows, levels].sum(axis=1)
+    feasible = np.all(blocks.sum(axis=2) == 1, axis=1) & (used <= int(problem["dW"]))
+    if not feasible.any():
+        return None
+    candidates = np.flatnonzero(feasible)
+    keys = [levels[candidates, column] for column in range(n_objects - 1, -1, -1)]
+    keys += [used[candidates], -values[candidates], -shots[candidates]]
+    best = candidates[np.lexsort(keys)[0]]
+    return tuple(int(level) for level in levels[best])
 
 
 def method_choice(record: dict[str, Any], method: str) -> tuple[int, ...] | None:
@@ -590,3 +598,19 @@ def top10_table(record: dict[str, Any]) -> pd.DataFrame:
     table = pd.DataFrame(rows, columns=columns)
     table["used"] = table["used"].astype("Int64")
     return table
+
+
+def figure_png(fig: Figure, dpi: int = PNG_DPI) -> bytes:
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png", dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
+    return buffer.getvalue()
+
+
+def frames_signature(out_dir: str | Path = "cache/path") -> tuple[tuple[str, int, int], ...]:
+    root = Path(out_dir)
+    if not root.is_dir():
+        return ()
+    return tuple(
+        (path.name, path.stat().st_mtime_ns, path.stat().st_size)
+        for path in sorted(root.glob("frame_*.json"))
+    )

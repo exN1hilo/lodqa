@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 from itertools import pairwise
@@ -25,8 +26,10 @@ from lodq.demo import (
     choice_matrices,
     choice_matrix,
     classical_record,
+    figure_png,
     frame_penalties,
     frame_scene,
+    frames_signature,
     headline,
     live_record,
     load_frames,
@@ -42,7 +45,14 @@ from lodq.demo import (
 from lodq.fastsim import probabilities, qaoa_state
 from lodq.metrics import problem_from_scene
 from lodq.plots import _qaoa_frame_ratios
-from lodq.qubo import all_energies, build_qubo, verify_qubo
+from lodq.qubo import (
+    all_energies,
+    bits_from_bitstring,
+    build_qubo,
+    decode,
+    is_feasible,
+    verify_qubo,
+)
 from lodq.scene import Camera, Scene, SceneObject, load_scene, save_scene, with_camera
 
 REPO = Path(__file__).resolve().parents[1]
@@ -163,7 +173,9 @@ def test_precompute_warm_starts_from_previous_frame(mini: tuple[Path, Path, list
         penalties = record["penalties"]
         qubo = build_qubo(problem.v, problem.dw, problem.dW, penalties["A"], penalties["B"])
         gammas, betas = np.array(prev["qaoa"]["gammas"]), np.array(prev["qaoa"]["betas"])
-        expected = probabilities(qaoa_state(qubo, gammas, betas)) @ all_energies(qubo)
+        energies = all_energies(qubo)
+        state = qaoa_state(energies / record["qaoa"]["scale"], gammas, betas, qubo.n)
+        expected = probabilities(state) @ energies
 
         assert record["qaoa"]["energy_history"][0] == pytest.approx(expected, abs=1e-8)
         assert record["qaoa"]["n_evals"] <= 10
@@ -672,3 +684,91 @@ def test_app_right_column_and_top10(
 
     assert len(at.dataframe) == 0
     assert any("no samples yet" in caption.value for caption in at.caption)
+
+
+def reference_top_choice(record: dict) -> tuple[int, ...] | None:
+    problem = record["problem"]
+    v, dw = np.asarray(problem["v"]), np.asarray(problem["dw"])
+    qubo = build_qubo(v, dw, problem["dW"], record["penalties"]["A"], record["penalties"]["B"])
+    best = None
+    for bitstring, count in record["qaoa"]["counts"].items():
+        bits = bits_from_bitstring(bitstring, qubo.n)
+        if not is_feasible(bits, qubo, dw):
+            continue
+        choice = decode(bits, qubo)
+        rows = np.arange(qubo.N)
+        key = (-count, -v[rows, list(choice)].sum(), dw[rows, list(choice)].sum(), choice)
+        best = key if best is None or key < best else best
+    return None if best is None else best[3]
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_qaoa_top_choice_matches_reference(mini: tuple[Path, Path, list[dict]], seed: int) -> None:
+    _, _, frames = mini
+    record = frames[seed % len(frames)]
+    rng = np.random.default_rng(seed)
+    n = len(next(iter(record["qaoa"]["counts"])))
+    states = rng.integers(0, 2, size=(200, n))
+    keys = {"".join(map(str, row)) for row in states}
+    counts = {key: int(rng.integers(1, 4)) for key in keys}
+    shuffled = record | {"qaoa": record["qaoa"] | {"counts": counts}}
+
+    assert qaoa_top_choice(shuffled) == reference_top_choice(shuffled)
+
+
+def test_figure_png_returns_png(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+
+    data = figure_png(budget_chart(frames[0]))
+
+    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    assert len(data) > 1000
+
+
+def test_frames_signature_tracks_files(mini: tuple[Path, Path, list[dict]], tmp_path: Path) -> None:
+    _, out, _ = mini
+    copy = tmp_path / "frames"
+
+    assert frames_signature(copy) == ()
+    copy.mkdir()
+    shutil.copy(out / "frame_00.json", copy)
+    first = frames_signature(copy)
+    shutil.copy(out / "frame_01.json", copy)
+    second = frames_signature(copy)
+    (copy / "frame_00.json").write_text(json.dumps({"frame": 0}), encoding="utf-8")
+    third = frames_signature(copy)
+
+    assert [name for name, _, _ in first] == ["frame_00.json"]
+    assert [name for name, _, _ in second] == ["frame_00.json", "frame_01.json"]
+    assert third != second
+
+
+def test_app_renders_cached_images(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, _ = mini
+    at = app(out, monkeypatch)
+
+    assert len(at.get("image")) == 3
+
+    at.sidebar.slider[0].set_value(1).run()
+    at.sidebar.slider[0].set_value(0).run()
+
+    assert not at.exception
+    assert len(at.get("image")) == 3
+
+
+def test_app_picks_up_new_frames(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, out, _ = mini
+    shutil.copy(out / "frame_00.json", tmp_path)
+    shutil.copy(out / "frame_01.json", tmp_path)
+    at = app(tmp_path, monkeypatch)
+
+    assert at.sidebar.slider[0].max == 1
+
+    shutil.copy(out / "frame_02.json", tmp_path)
+    at.run()
+
+    assert at.sidebar.slider[0].max == 2

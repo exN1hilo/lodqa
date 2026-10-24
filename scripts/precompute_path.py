@@ -20,7 +20,7 @@ def main() -> None:
     parser.add_argument("--maxiter", type=int, default=60, help="first frame")
     parser.add_argument("--warm-maxiter", type=int, default=30, help="warm-started frames")
     parser.add_argument("--shots", type=int, default=4096)
-    parser.add_argument("--backend", choices=["aer", "statevector", "fastsim"], default="aer")
+    parser.add_argument("--backend", choices=["fastsim", "aer", "statevector"], default="fastsim")
     parser.add_argument("--exact", action="store_true", help="also store exact metrics")
     args = parser.parse_args()
 
