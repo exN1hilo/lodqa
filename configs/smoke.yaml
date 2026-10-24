@@ -1,0 +1,6 @@
+# Быстрый прогон: 1 сцена, p=1, 1 seed (make all QUICK=1)
+name: smoke
+scene_presets: [default]
+p_list: [1]
+seeds: [0]
+maxiter: 50

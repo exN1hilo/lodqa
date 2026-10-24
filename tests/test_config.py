@@ -6,6 +6,9 @@ from pydantic import ValidationError
 
 from lodq.config import ExperimentConfig, dump_config, load_config
 
+CONFIGS_DIR = Path(__file__).resolve().parents[1] / "configs"
+CONFIG_PATHS = sorted([*CONFIGS_DIR.glob("*.yaml"), *CONFIGS_DIR.glob("*.yml")])
+
 
 def make(**kw) -> ExperimentConfig:
     return ExperimentConfig(name="test", scene_presets=["default"], **kw)
@@ -143,3 +146,22 @@ def test_dump_config_roundtrip() -> None:
     assert data["penalty_B"] == "auto"
     assert json.loads(json.dumps(data)) == data
     assert ExperimentConfig.model_validate(data) == cfg
+
+
+def test_configs_dir_not_empty() -> None:
+    assert CONFIG_PATHS, f"в {CONFIGS_DIR} нет ни одного YAML-конфига"
+
+
+@pytest.mark.parametrize("path", CONFIG_PATHS, ids=lambda p: p.name)
+def test_all_configs_load(path: Path) -> None:
+    cfg = load_config(path)
+    assert ExperimentConfig.model_validate(dump_config(cfg)) == cfg
+
+
+def test_smoke_config() -> None:
+    cfg = load_config(CONFIGS_DIR / "smoke.yaml")
+    assert cfg.name == "smoke"
+    assert cfg.scene_presets == ["default"]
+    assert cfg.p_list == [1]
+    assert cfg.seeds == [0]
+    assert cfg.maxiter == 50
