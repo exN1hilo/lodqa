@@ -1,0 +1,11 @@
+# Random scenes use another mixer and seed list, so they are in main_random.yaml.
+name: main
+scene_presets:
+  - greedy_trap_1
+  - greedy_trap_2
+  - greedy_trap_3
+p_list: [1, 2, 3, 4]
+mixers: [x, xy]
+seeds: [0, 1, 2, 3, 4]
+shots: 4096
+backend: fastsim

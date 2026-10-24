@@ -63,8 +63,13 @@ class QAOAResult:
         object.__setattr__(self, "energy_history", [float(e) for e in self.energy_history])
         object.__setattr__(self, "counts", {str(k): int(c) for k, c in self.counts.items()})
 
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
 
 def make_estimator(backend: str = "aer", *, seed: int) -> BaseEstimatorV2:
+    if backend == "fastsim":
+        backend = "statevector"
     if backend == "aer":
         return AerEstimatorV2(
             options={
@@ -79,6 +84,8 @@ def make_estimator(backend: str = "aer", *, seed: int) -> BaseEstimatorV2:
 
 
 def make_sampler(backend: str = "aer", *, seed: int) -> BaseSamplerV2:
+    if backend == "fastsim":
+        backend = "statevector"
     if backend == "aer":
         return AerSamplerV2(seed=seed, options={"backend_options": {"method": "statevector"}})
     if backend == "statevector":
