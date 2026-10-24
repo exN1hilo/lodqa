@@ -37,6 +37,43 @@ def _validate_problem(
     return utility, weights.astype(np.int64, copy=False)
 
 
+def _dp_table(
+    v: NDArray[np.float64],
+    dw: NDArray[np.int64],
+    dW: int,
+) -> tuple[NDArray[np.float64], NDArray[np.int64]]:
+    """Exact-budget MCKP DP table and argmax pointers.
+
+    dp[i, b] is the best value using the first i objects with used budget
+    exactly b. Unreachable states are -inf; dp[0, 0] = 0. choice_ptr[i, b]
+    stores the chosen LOD j for object i at budget b (smaller j on ties).
+    """
+    utility, weights = _validate_problem(v, dw, dW)
+    n_objects, n_lods = utility.shape
+    n_budgets = int(dW) + 1
+
+    dp = np.full((n_objects + 1, n_budgets), -np.inf, dtype=np.float64)
+    dp[0, 0] = 0.0
+    choice_ptr = np.full((n_objects, n_budgets), -1, dtype=np.int64)
+
+    for i in range(n_objects):
+        prev = dp[i]
+        row = np.full(n_budgets, -np.inf, dtype=np.float64)
+        chosen = np.full(n_budgets, -1, dtype=np.int64)
+        for j in range(n_lods):
+            cost = int(weights[i, j])
+            if cost >= n_budgets:
+                continue
+            candidate = prev[: n_budgets - cost] + utility[i, j]
+            better = candidate > row[cost:]
+            row[cost:] = np.where(better, candidate, row[cost:])
+            chosen[cost:] = np.where(better, j, chosen[cost:])
+        dp[i + 1] = row
+        choice_ptr[i] = chosen
+
+    return dp, choice_ptr
+
+
 def evaluate_choice(
     choice: tuple[int, ...],
     v: NDArray[np.float64],
@@ -102,3 +139,108 @@ def enumerate_feasible(
         solutions,
         key=lambda solution: (-solution.value, solution.used, solution.choice),
     )
+
+
+_TIE_TOL = 1e-12
+
+
+def solution_key(solution: Solution) -> tuple[float, int, tuple[int, ...]]:
+    """Sort key: higher value, then smaller used, then lexicographically smaller choice."""
+    return (-solution.value, solution.used, solution.choice)
+
+
+def _best_budget(dp_last: NDArray[np.float64]) -> int:
+    """Smallest b whose dp[N, b] is within _TIE_TOL of the maximum."""
+    reachable = np.isfinite(dp_last)
+    if not reachable.any():
+        raise ValueError("no feasible solutions found for the given budget")
+    best = dp_last[reachable].max()
+    return int(np.flatnonzero(reachable & (dp_last >= best - _TIE_TOL))[0])
+
+
+def _backtrack_choice(
+    choice_ptr: NDArray[np.int64],
+    weights: NDArray[np.int64],
+    used: int,
+) -> tuple[int, ...]:
+    """Follows choice_ptr from i = N down to 1, decreasing the budget by dw[i-1, j]."""
+    choice = [0] * choice_ptr.shape[0]
+    budget = used
+    for i in range(choice_ptr.shape[0] - 1, -1, -1):
+        lod = int(choice_ptr[i, budget])
+        choice[i] = lod
+        budget -= int(weights[i, lod])
+    return tuple(choice)
+
+
+def _lexmin_tied_choice(
+    dp: NDArray[np.float64],
+    utility: NDArray[np.float64],
+    weights: NDArray[np.int64],
+    used: int,
+) -> tuple[int, ...]:
+    """Lexicographically smallest choice among all optimal paths ending at dp[N, used].
+
+    A backward pass marks states lying on some optimal path (tight transitions,
+    tolerance _TIE_TOL); a forward pass then takes the smallest j at each object.
+    """
+    n_objects, n_lods = utility.shape
+    n_budgets = dp.shape[1]
+
+    def tight(i: int, b: int, j: int, next_b: int) -> bool:
+        return abs(dp[i, b] + utility[i, j] - dp[i + 1, next_b]) <= _TIE_TOL
+
+    on_path = np.zeros(dp.shape, dtype=bool)
+    on_path[n_objects, used] = True
+    for i in range(n_objects - 1, -1, -1):
+        for b in np.flatnonzero(on_path[i + 1]):
+            for j in range(n_lods):
+                prev_b = int(b) - int(weights[i, j])
+                if prev_b >= 0 and tight(i, prev_b, j, int(b)):
+                    on_path[i, prev_b] = True
+
+    choice: list[int] = []
+    budget = 0
+    for i in range(n_objects):
+        for j in range(n_lods):
+            next_b = budget + int(weights[i, j])
+            if next_b < n_budgets and on_path[i + 1, next_b] and tight(i, budget, j, next_b):
+                break
+        choice.append(j)
+        budget = next_b
+    return tuple(choice)
+
+
+def dp_solve(
+    v: NDArray[np.float64],
+    dw: NDArray[np.int64],
+    dW: int,
+) -> Solution:
+    """Exact MCKP solution from _dp_table with the same tie-break as brute_force.
+
+    Among b <= dW with maximal dp[N, b] (tolerance 1e-12) the smallest b is taken,
+    i.e. the smaller used. Backtracking choice_ptr from i = N fixes the last
+    objects first, so the smaller-j preference alone does not guarantee the
+    lexicographically smallest choice among tied optima: for
+    v = [[1, 2], [1, 2]], dw = [[0, 1], [0, 1]], dW = 1 it yields (1, 0) while
+    brute_force returns (0, 1). The pointer result is therefore compared with
+    _lexmin_tied_choice, and the smaller one wins. Both have the same used and
+    values equal within the tolerance, so (used, choice) from solution_key decides;
+    raw float values are not compared to avoid last-bit summation noise.
+    """
+    utility, weights = _validate_problem(v, dw, dW)
+    dp, choice_ptr = _dp_table(utility, weights, dW)
+    used = _best_budget(dp[-1])
+
+    candidates = [
+        evaluate_choice(choice, utility, weights, dW)
+        for choice in (
+            _backtrack_choice(choice_ptr, weights, used),
+            _lexmin_tied_choice(dp, utility, weights, used),
+        )
+    ]
+    best = min(
+        (candidate for candidate in candidates if candidate is not None),
+        key=lambda solution: solution_key(solution)[1:],
+    )
+    return Solution(best.choice, best.value, best.used, "dp")
