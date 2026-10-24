@@ -5,7 +5,16 @@ import numpy as np
 import pytest
 
 from lodq.metrics import toy_trap_problem
-from lodq.qubo import Qubo, build_qubo, energy
+from lodq.qubo import (
+    Qubo,
+    bits_from_bitstring,
+    bitstring_from_bits,
+    build_qubo,
+    decode,
+    encode,
+    energy,
+    is_feasible,
+)
 
 
 def test_build_qubo_trap_structure() -> None:
@@ -122,3 +131,115 @@ def test_energy_trap_optimum() -> None:
     bits = np.zeros(qubo.n, dtype=np.uint8)
     bits[[2, 3, 6, 11, 14]] = 1
     assert energy(bits, qubo) == pytest.approx(-1.47, abs=1e-9, rel=0)
+
+
+@pytest.mark.parametrize(
+    "choice, slack, value",
+    [
+        ((2, 2, 2, 2, 2), [0, 1, 0, 1], 0.45),
+        ((0, 2, 2, 2, 2), [0, 1, 0, 0], 1.30),
+        ((2, 0, 0, 2, 2), [0, 0, 0, 0], 1.47),
+    ],
+)
+def test_encode_decode_trap_choices(
+    choice: tuple[int, ...], slack: list[int], value: float
+) -> None:
+    problem = toy_trap_problem()
+    qubo = build_qubo(problem.v, problem.dw, problem.dW, 1.5, 1.2)
+    bits = encode(choice, qubo, problem.dw)
+
+    assert bits.shape == (19,)
+    assert bits.dtype == np.int8
+    np.testing.assert_array_equal(bits[:15].reshape(5, 3), np.eye(3, dtype=np.int8)[list(choice)])
+    np.testing.assert_array_equal(bits[15:], slack)
+    assert decode(bits, qubo) == choice
+    assert is_feasible(bits, qubo, problem.dw) is True
+    assert energy(bits, qubo) == pytest.approx(-value, abs=1e-9, rel=0)
+
+
+def test_encode_rejects_over_budget_choice() -> None:
+    problem = toy_trap_problem()
+    qubo = build_qubo(problem.v, problem.dw, problem.dW, 1.5, 1.2)
+    with pytest.raises(ValueError, match="Превышен бюджет"):
+        encode((0, 0, 0, 0, 0), qubo, problem.dw)
+
+
+@pytest.mark.parametrize("choice", [(2, 2), (-1, 2, 2, 2, 2), (3, 2, 2, 2, 2)])
+def test_encode_rejects_invalid_choice(choice: tuple[int, ...]) -> None:
+    problem = toy_trap_problem()
+    qubo = build_qubo(problem.v, problem.dw, problem.dW, 1.5, 1.2)
+    with pytest.raises(ValueError, match="choice"):
+        encode(choice, qubo, problem.dw)
+
+
+def test_encode_zero_budget_without_slack() -> None:
+    v = np.array([[1.0, 0.2], [0.7, 0.1]])
+    dw = np.array([[2, 0], [1, 0]])
+    qubo = build_qubo(v, dw, 0, 1.5, 1.2)
+    bits = encode((1, 1), qubo, dw)
+    assert qubo.K == 0
+    np.testing.assert_array_equal(bits, [0, 1, 0, 1])
+    assert decode(bits, qubo) == (1, 1)
+    assert is_feasible(bits, qubo, dw) is True
+
+
+@pytest.mark.parametrize("block", [[0, 0, 0], [1, 1, 0], [1, 1, 1], [1, -1, 1]])
+def test_decode_rejects_invalid_one_hot_blocks(block: list[int]) -> None:
+    problem = toy_trap_problem()
+    qubo = build_qubo(problem.v, problem.dw, problem.dW, 1.5, 1.2)
+    bits = encode((2, 2, 2, 2, 2), qubo, problem.dw)
+    bits[3:6] = block
+    assert decode(bits, qubo) is None
+    assert is_feasible(bits, qubo, problem.dw) is False
+
+
+def test_is_feasible_rejects_budget_violation_without_rejecting_one_hot() -> None:
+    problem = toy_trap_problem()
+    qubo = build_qubo(problem.v, problem.dw, problem.dW, 1.5, 1.2)
+    bits = np.zeros(qubo.n, dtype=np.int8)
+    bits[[0, 3, 6, 9, 12]] = 1
+    assert decode(bits, qubo) == (0, 0, 0, 0, 0)
+    assert is_feasible(bits, qubo, problem.dw) is False
+
+
+def test_decode_and_feasibility_ignore_slack() -> None:
+    problem = toy_trap_problem()
+    qubo = build_qubo(problem.v, problem.dw, problem.dW, 1.5, 1.2)
+    choice = (2, 2, 2, 2, 2)
+    bits = encode(choice, qubo, problem.dw)
+    bits[15:] = 1
+    before = bits.copy()
+    assert decode(bits, qubo) == choice
+    assert is_feasible(bits, qubo, problem.dw) is True
+    np.testing.assert_array_equal(bits, before)
+
+
+def test_bits_from_bitstring_uses_qiskit_order() -> None:
+    np.testing.assert_array_equal(bits_from_bitstring("10010", 5), [0, 1, 0, 0, 1])
+    assert bitstring_from_bits(np.array([0, 1, 0, 0, 1])) == "10010"
+
+
+@pytest.mark.parametrize("s", ["", "0", "1", "0010110", "10000"])
+def test_bitstring_round_trip(s: str) -> None:
+    bits = bits_from_bitstring(s, len(s))
+    assert bits.shape == (len(s),)
+    assert bits.dtype == np.int8
+    assert bitstring_from_bits(bits) == s
+
+
+@pytest.mark.parametrize("s, n", [("101", 2), ("101", 4), ("", 1)])
+def test_bits_from_bitstring_rejects_wrong_length(s: str, n: int) -> None:
+    with pytest.raises(ValueError, match="Длина"):
+        bits_from_bitstring(s, n)
+
+
+@pytest.mark.parametrize("s", ["10x", "102", "1 0"])
+def test_bits_from_bitstring_rejects_nonbinary_characters(s: str) -> None:
+    with pytest.raises(ValueError, match="только 0 и 1"):
+        bits_from_bitstring(s, len(s))
+
+
+@pytest.mark.parametrize("bits", [np.array([[0, 1]]), np.array([0, 2])])
+def test_bitstring_from_bits_rejects_invalid_bits(bits: np.ndarray) -> None:
+    with pytest.raises(ValueError, match="bits"):
+        bitstring_from_bits(bits)
