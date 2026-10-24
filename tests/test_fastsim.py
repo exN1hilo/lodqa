@@ -2,7 +2,14 @@ import numpy as np
 import pytest
 from qiskit.quantum_info import SparsePauliOp, Statevector
 
-from lodq.fastsim import expectation, optimize_fast, probabilities, qaoa_state
+from lodq.fastsim import (
+    expectation,
+    landscape_p1,
+    optimize_fast,
+    probabilities,
+    qaoa_state,
+    save_landscape,
+)
 from lodq.ising import ising_diagonal, qubo_to_ising
 from lodq.qaoa import (
     assemble_values,
@@ -126,3 +133,41 @@ def test_optimize_fast_rejects_bad_arguments(toy_energies: tuple[np.ndarray, int
         optimize_fast(energies, n, p=1, n_starts=0)
     with pytest.raises(ValueError, match="p must be"):
         optimize_fast(energies, n, p=0)
+
+
+def test_landscape_p1_matches_qaoa_state(toy_energies: tuple[np.ndarray, int]) -> None:
+    scaled, n = toy_energies
+    energies = 2.5 * scaled + 1.0
+    gammas, betas, L = landscape_p1(scaled, energies, n, grid=7)
+    np.testing.assert_allclose(gammas, np.linspace(0, np.pi, 7))
+    np.testing.assert_allclose(betas, np.linspace(0, np.pi / 2, 7))
+    assert L.shape == (7, 7)
+    expected = [
+        [expectation(qaoa_state(scaled, [g], [b], n), energies) for b in betas] for g in gammas
+    ]
+    np.testing.assert_allclose(L, expected, atol=1e-12)
+
+
+def test_landscape_p1_is_uniform_mean_at_zero_beta(toy_energies: tuple[np.ndarray, int]) -> None:
+    scaled, n = toy_energies
+    _, _, L = landscape_p1(scaled, scaled, n, grid=5)
+    np.testing.assert_allclose(L[:, 0], scaled.mean())
+    np.testing.assert_allclose(L[0, :], scaled.mean())
+
+
+def test_landscape_p1_rejects_bad_shapes() -> None:
+    with pytest.raises(ValueError, match="energies_scaled and energies"):
+        landscape_p1(np.zeros(8), np.zeros(4), 3)
+    with pytest.raises(ValueError, match="grid"):
+        landscape_p1(np.zeros(8), np.zeros(8), 3, grid=0)
+
+
+def test_save_landscape_round_trip(tmp_path, toy_energies: tuple[np.ndarray, int]) -> None:
+    scaled, n = toy_energies
+    gammas, betas, L = landscape_p1(scaled, scaled, n, grid=4)
+    path = save_landscape(tmp_path / "figures" / "landscape", gammas, betas, L)
+    assert path == tmp_path / "figures" / "landscape.npz"
+    with np.load(path) as data:
+        np.testing.assert_array_equal(data["gammas"], gammas)
+        np.testing.assert_array_equal(data["betas"], betas)
+        np.testing.assert_array_equal(data["L"], L)

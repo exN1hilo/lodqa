@@ -3,6 +3,8 @@
 Matches qaoa_ansatz: each layer applies exp(-iγ_k H_C), then exp(-iβ_k ΣX).
 """
 
+from pathlib import Path
+
 import numpy as np
 from scipy.optimize import minimize
 
@@ -30,16 +32,25 @@ def qaoa_state(
             f"{gamma_values.shape} and {beta_values.shape}"
         )
 
-    psi = np.full(1 << n, 1 / np.sqrt(1 << n), dtype=np.complex128)
+    psi = _uniform(n)
     for gamma, beta in zip(gamma_values, beta_values, strict=True):
         psi *= np.exp(-1j * gamma * energies)
-        cos, isin = np.cos(beta), 1j * np.sin(beta)
-        for q in range(n):
-            t = psi.reshape(1 << (n - q - 1), 2, 1 << q)
-            a, b = t[:, 0, :].copy(), t[:, 1, :].copy()
-            t[:, 0, :] = cos * a - isin * b
-            t[:, 1, :] = cos * b - isin * a
+        _apply_mixer(psi, beta, n)
     return psi
+
+
+def _uniform(n: int) -> np.ndarray:
+    return np.full(1 << n, 1 / np.sqrt(1 << n), dtype=np.complex128)
+
+
+def _apply_mixer(psi: np.ndarray, beta: float, n: int) -> None:
+    """exp(-iβ ΣX) in place: RX(2β) on every qubit."""
+    cos, isin = np.cos(beta), 1j * np.sin(beta)
+    for q in range(n):
+        t = psi.reshape(1 << (n - q - 1), 2, 1 << q)
+        a, b = t[:, 0, :].copy(), t[:, 1, :].copy()
+        t[:, 0, :] = cos * a - isin * b
+        t[:, 1, :] = cos * b - isin * a
 
 
 def probabilities(psi: np.ndarray) -> np.ndarray:
@@ -48,6 +59,45 @@ def probabilities(psi: np.ndarray) -> np.ndarray:
 
 def expectation(psi: np.ndarray, energies: np.ndarray) -> float:
     return float(probabilities(psi) @ np.asarray(energies, dtype=np.float64))
+
+
+def landscape_p1(
+    energies_scaled: np.ndarray, energies: np.ndarray, n: int, grid: int = 60
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """<H> of the p=1 state on a γ×β grid: L[i, j] at gammas[i], betas[j].
+
+    The state is driven by energies_scaled, the expectation is taken over energies, so L can
+    be in QUBO units. γ ∈ [0, π], β ∈ [0, π/2].
+    """
+    if grid < 1:
+        raise ValueError(f"grid must be >= 1, got {grid}")
+    scaled = np.asarray(energies_scaled, dtype=np.float64)
+    values = np.asarray(energies, dtype=np.float64)
+    if scaled.shape != (1 << n,) or values.shape != (1 << n,):
+        raise ValueError(
+            f"energies_scaled and energies must have shape ({1 << n},), got "
+            f"{scaled.shape} and {values.shape}"
+        )
+    gammas = np.linspace(0.0, np.pi, grid)
+    betas = np.linspace(0.0, np.pi / 2, grid)
+    L = np.empty((grid, grid), dtype=np.float64)
+    for i, gamma in enumerate(gammas):
+        phased = _uniform(n) * np.exp(-1j * gamma * scaled)
+        for j, beta in enumerate(betas):
+            psi = phased.copy()
+            _apply_mixer(psi, beta, n)
+            L[i, j] = expectation(psi, values)
+    return gammas, betas, L
+
+
+def save_landscape(path: str | Path, gammas: np.ndarray, betas: np.ndarray, L: np.ndarray) -> Path:
+    """Write gammas, betas and L to an .npz file; returns the path np.savez wrote."""
+    path = Path(path)
+    if path.suffix != ".npz":
+        path = path.with_name(path.name + ".npz")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(path, gammas=gammas, betas=betas, L=L)
+    return path
 
 
 def _starts(
