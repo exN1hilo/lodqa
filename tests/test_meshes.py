@@ -1,10 +1,11 @@
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
 import pytest
 import pyvista as pv
 
-from lodq.meshes import SOURCES, base_meshes, normalize_mesh, prepare_mesh
+from lodq.meshes import SOURCES, base_meshes, make_lods, normalize_mesh, prepare_mesh
 from lodq.scene import load_scene
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +75,53 @@ def test_prepare_invalid_n_tris() -> None:
         prepare_mesh(shifted_sphere(), 0)
 
 
+def test_make_lods_counts() -> None:
+    mesh = prepare_mesh(shifted_sphere(), 2000)
+    lods = make_lods(mesh)
+    counts = [lod.n_cells for lod in lods]
+    assert counts[0] == mesh.n_cells
+    assert counts[1] == pytest.approx(800, rel=0.02)
+    assert counts[2] == pytest.approx(200, rel=0.02)
+    assert all(high > low for high, low in pairwise(counts))
+    assert all(lod.is_all_triangles for lod in lods)
+    assert_same_frame(lods, tol=0.05)
+
+
+def test_make_lods_lod0_is_copy() -> None:
+    mesh = prepare_mesh(shifted_sphere(), 2000)
+    before = mesh.points.copy()
+    lods = make_lods(mesh)
+    assert lods[0] is not mesh
+    np.testing.assert_array_equal(lods[0].points, mesh.points)
+    lods[0].points[:] = 0.0
+    np.testing.assert_array_equal(mesh.points, before)
+
+
+def assert_same_frame(lods: list[pv.PolyData], tol: float) -> None:
+    for lod in lods:
+        lo, hi = np.reshape(lod.bounds, (3, 2)).T
+        assert np.abs((lo + hi) / 2).max() < tol
+        assert np.linalg.norm(lod.points, axis=1).max() == pytest.approx(1.0, abs=tol)
+
+
+def test_make_lods_same_frame() -> None:
+    assert_same_frame(make_lods(prepare_mesh(shifted_sphere(), 2000)), tol=0.05)
+
+
+def test_make_lods_custom_ratios() -> None:
+    lods = make_lods(prepare_mesh(shifted_sphere(), 2000), ratios=(1.0, 0.5))
+    assert len(lods) == 2
+    assert lods[1].n_cells == pytest.approx(1000, rel=0.02)
+
+
+@pytest.mark.parametrize(
+    "ratios", [(), (0.4, 0.1), (1.0, 0.4, 0.4), (1.0, 0.1, 0.4), (1.0, 0.0), (1.0, -0.1)]
+)
+def test_make_lods_invalid_ratios(ratios: tuple[float, ...]) -> None:
+    with pytest.raises(ValueError, match="ratios"):
+        make_lods(prepare_mesh(shifted_sphere(), 2000), ratios=ratios)
+
+
 @pytest.fixture(scope="module")
 def meshes() -> dict[str, pv.PolyData]:
     try:
@@ -99,3 +147,15 @@ def test_base_mesh_prepared(meshes: dict[str, pv.PolyData], name: str) -> None:
 def test_lucy_is_upright(meshes: dict[str, pv.PolyData]) -> None:
     lo, hi = np.reshape(meshes["lucy"].bounds, (3, 2)).T
     assert np.argmax(hi - lo) == 1
+
+
+@pytest.mark.parametrize("name", list(SOURCES))
+def test_base_mesh_lods(meshes: dict[str, pv.PolyData], name: str) -> None:
+    lods = make_lods(meshes[name])
+    counts = [lod.n_cells for lod in lods]
+    n_tris = SOURCES[name].n_tris
+    assert all(high > low for high, low in pairwise(counts))
+    assert counts[1] == pytest.approx(0.4 * n_tris, rel=0.02)
+    assert counts[2] == pytest.approx(0.1 * n_tris, rel=0.02)
+    assert all(lod.is_all_triangles for lod in lods)
+    assert_same_frame(lods, tol=0.01)

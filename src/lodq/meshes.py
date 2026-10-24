@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
+from itertools import pairwise
 
 import numpy as np
 import pyvista as pv
@@ -43,6 +44,14 @@ def prepare_mesh(mesh: pv.PolyData, n_tris: int) -> pv.PolyData:
     if out.n_cells > n_tris:
         out = out.decimate(1 - n_tris / out.n_cells)
     return normalize_mesh(out)
+
+
+def make_lods(mesh: pv.PolyData, ratios: tuple[float, ...] = (1.0, 0.4, 0.1)) -> list[pv.PolyData]:
+    if not ratios or ratios[0] != 1.0:
+        raise ValueError(f"ratios должны начинаться с 1.0 (LOD0 — оригинал), получено {ratios}")
+    if any(not 0 < low < high for high, low in pairwise(ratios)):
+        raise ValueError(f"ratios должны строго убывать и быть больше 0, получено {ratios}")
+    return [mesh.copy()] + [mesh.decimate(1 - ratio) for ratio in ratios[1:]]
 
 
 def base_meshes(sources: dict[str, MeshSource] = SOURCES) -> dict[str, pv.PolyData]:
