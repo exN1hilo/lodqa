@@ -1,11 +1,13 @@
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
 import pytest
 import pyvista as pv
+from matplotlib.ft2font import FT2Font
 
 from lodq import render
-from lodq.scene import SceneObject
+from lodq.scene import Camera, Scene, SceneObject
 
 
 @pytest.mark.parametrize("j", [0, 1])
@@ -82,3 +84,103 @@ def test_load_lod_mesh_sphere_resolution_is_at_least_eight() -> None:
 
     assert result.is_all_triangles
     assert result.n_cells == 96
+
+
+@pytest.mark.parametrize("budget, budget_text", [(5000, "5 000"), (3000, "3 000")])
+def test_render_solution_draws_lods_and_annotates_real_triangle_budget(
+    budget: int, budget_text: str
+) -> None:
+    scene = Scene(
+        name="panel",
+        objects=(
+            SceneObject("left", (-3.0, 0.0, 0.0), 1.0, (2000, 800, 200)),
+            SceneObject("middle", (0.0, 0.0, 0.0), 1.0, (2400, 1000, 250)),
+            SceneObject("right", (3.0, 0.0, 0.0), 1.0, (3000, 1200, 300)),
+        ),
+        camera=Camera((8.0, 6.0, -12.0), target=(0.0, 0.0, 0.0), fov_deg=45.0),
+        budget_W=budget,
+    )
+    choice = (2, 0, 1)
+    with closing(pv.Plotter(off_screen=True, window_size=(800, 600))) as plotter:
+        assert render.render_solution(plotter, scene, choice, "Greedy", 0.884) is None
+
+        actors = [actor for actor in plotter.actors.values() if isinstance(actor, pv.Actor)]
+        assert len(actors) == 3
+        for actor, obj, j in zip(actors, scene.objects, choice, strict=True):
+            assert actor.mapper.dataset.n_cells == pytest.approx(obj.tri_counts[j], rel=0.1)
+            distances = np.linalg.norm(actor.mapper.dataset.points - obj.position, axis=1)
+            np.testing.assert_allclose(distances, 1.0, atol=1e-6, rtol=0)
+            assert actor.prop.color.float_rgb == pytest.approx(
+                pv.Color(render.LOD_COLORS[j]).float_rgb
+            )
+            assert actor.prop.show_edges is True
+            assert actor.prop.edge_color.float_rgb == pytest.approx((0.2, 0.2, 0.2))
+            assert actor.prop.line_width == pytest.approx(0.3)
+            assert actor.prop.GetInterpolationAsString() == "Phong"
+
+        annotations = [
+            actor for actor in plotter.actors.values() if isinstance(actor, pv.CornerAnnotation)
+        ]
+        assert any(actor.get_text(actor.UpperEdge) == "Greedy" for actor in annotations)
+        expected_percent = "76 %" if budget == 5000 else "127 %"
+        assert any(
+            f"Бюджет: 3 800 / {budget_text} треугольников ({expected_percent})\n"
+            "Качество: V / V_DP = 0.88" == actor.get_text(actor.LowerLeft)
+            for actor in annotations
+        )
+        legend = plotter.legend
+        assert legend.GetNumberOfEntries() == 3
+        for j in range(3):
+            assert legend.GetEntryString(j) == f"LOD{j}"
+            assert legend.GetEntryColor(j) == pytest.approx(
+                pv.Color(render.LOD_COLORS[j]).float_rgb
+            )
+        assert plotter.camera.position == pytest.approx(scene.camera.position)
+        assert plotter.camera.focal_point == pytest.approx(scene.camera.target)
+        assert plotter.camera.up == pytest.approx((0, 1, 0))
+        assert plotter.camera.view_angle == pytest.approx(45.0)
+
+
+@pytest.mark.parametrize(
+    "camera",
+    [Camera((2.0, 3.0, -7.0), (1.0, 0.0, 4.0), 37.0), Camera((-4.0, 6.0, 5.0), (0, 1, -2), 91.0)],
+)
+def test_set_camera_applies_position_target_up_and_fov(camera: Camera) -> None:
+    with closing(pv.Plotter(off_screen=True)) as plotter:
+        plotter.camera.up = (1.0, 0.0, 0.0)
+
+        assert render.set_camera(plotter, camera) is None
+
+        assert plotter.camera.position == pytest.approx(camera.position)
+        assert plotter.camera.focal_point == pytest.approx(camera.target)
+        assert plotter.camera.up == pytest.approx((0, 1, 0))
+        assert plotter.camera.view_angle == pytest.approx(camera.fov_deg)
+
+
+def test_render_solution_handles_empty_scene_and_zero_budget() -> None:
+    scene = Scene("empty", (), Camera((0, 0, -5)), budget_W=0)
+    with closing(pv.Plotter(off_screen=True)) as plotter:
+        render.render_solution(plotter, scene, (), "Empty", 0.0)
+
+        assert any(
+            "Бюджет: 0 / 0 треугольников (0 %)" in (actor.get_text(actor.LowerLeft) or "")
+            for actor in plotter.actors.values()
+            if isinstance(actor, pv.CornerAnnotation)
+        )
+
+
+def test_render_solution_uses_font_with_cyrillic_glyphs() -> None:
+    scene = Scene("empty", (), Camera((0, 0, -5)), budget_W=0)
+    with closing(pv.Plotter(off_screen=True)) as plotter:
+        render.render_solution(plotter, scene, (), "Решение DP", 1.0)
+
+        annotations = [
+            actor for actor in plotter.actors.values() if isinstance(actor, pv.CornerAnnotation)
+        ]
+        assert len(annotations) == 2
+        for actor in annotations:
+            font_file = actor.GetTextProperty().GetFontFile()
+            assert font_file is not None
+            glyphs = FT2Font(font_file).get_charmap()
+            text = "".join(actor.get_text(position) or "" for position in range(8))
+            assert all(ord(char) in glyphs for char in text if not char.isspace())
