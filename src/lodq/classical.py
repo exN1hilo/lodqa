@@ -292,3 +292,37 @@ def greedy_solve(
     solution = evaluate_choice(tuple(current), utility, weights, dW)
     assert solution is not None
     return Solution(solution.choice, solution.value, solution.used, "greedy")
+
+
+def random_solve(
+    v: NDArray[np.float64],
+    dw: NDArray[np.int64],
+    dW: int,
+    n_samples: int = 100,
+    seed: int = 0,
+) -> Solution:
+    """Best feasible of n_samples uniform random choices by solution_key; all LOD M-1 if none."""
+    utility, weights = _validate_problem(v, dw, dW)
+    if n_samples < 0:
+        raise ValueError("n_samples must be non-negative")
+    n_objects, n_lods = utility.shape
+    rng = np.random.default_rng(seed)
+
+    best: Solution | None = None
+    for _ in range(n_samples):
+        choice = tuple(int(j) for j in rng.integers(0, n_lods, n_objects))
+        candidate = evaluate_choice(choice, utility, weights, dW)
+        if candidate is not None and (best is None or solution_key(candidate) < solution_key(best)):
+            best = candidate
+    if best is None:
+        best = evaluate_choice((n_lods - 1,) * n_objects, utility, weights, dW)
+        if best is None:
+            raise ValueError("lowest-LOD choice exceeds the budget")
+    return Solution(best.choice, best.value, best.used, "random")
+
+
+def approximation_ratio(sol: Solution, opt: Solution) -> float:
+    """sol.value / opt.value; opt.value must be positive."""
+    if opt.value <= 0:
+        raise ValueError("opt.value must be positive")
+    return sol.value / opt.value

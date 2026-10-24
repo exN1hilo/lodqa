@@ -4,11 +4,13 @@ import pytest
 from lodq.classical import (
     Solution,
     _dp_table,
+    approximation_ratio,
     brute_force,
     dp_solve,
     enumerate_feasible,
     evaluate_choice,
     greedy_solve,
+    random_solve,
     solution_key,
 )
 from lodq.metrics import toy_trap_problem
@@ -218,3 +220,49 @@ def test_greedy_solve_ratio_and_ddv_tie_prefers_smaller_i() -> None:
     solution = greedy_solve(utility, weights, 1)
 
     assert solution.choice == (0, 1)
+
+
+def test_random_solve_is_feasible_and_reproducible() -> None:
+    problem = toy_trap_problem()
+
+    solution = random_solve(problem.v, problem.dw, problem.dW, n_samples=50, seed=7)
+
+    assert solution.used <= problem.dW
+    assert solution.solver == "random"
+    assert solution == random_solve(problem.v, problem.dw, problem.dW, n_samples=50, seed=7)
+    assert solution.value <= dp_solve(problem.v, problem.dw, problem.dW).value + 1e-12
+
+
+def test_random_solve_returns_best_sample_by_solution_key() -> None:
+    problem = toy_trap_problem()
+    rng = np.random.default_rng(3)
+    samples = [tuple(int(j) for j in rng.integers(0, 3, 5)) for _ in range(30)]
+    feasible = [s for c in samples if (s := evaluate_choice(c, problem.v, problem.dw, problem.dW))]
+
+    solution = random_solve(problem.v, problem.dw, problem.dW, n_samples=30, seed=3)
+
+    assert solution.choice == min(feasible, key=solution_key).choice
+
+
+def test_random_solve_falls_back_to_lowest_lod() -> None:
+    problem = toy_trap_problem()
+
+    solution = random_solve(problem.v, problem.dw, problem.dW, n_samples=0)
+
+    assert (solution.choice, solution.used, solution.solver) == ((2, 2, 2, 2, 2), 0, "random")
+
+
+def test_approximation_ratio_on_trap_fixture() -> None:
+    problem = toy_trap_problem()
+    greedy = greedy_solve(problem.v, problem.dw, problem.dW)
+    opt = dp_solve(problem.v, problem.dw, problem.dW)
+
+    assert approximation_ratio(greedy, opt) == pytest.approx(1.30 / 1.47)
+    assert round(approximation_ratio(greedy, opt), 3) == 0.884
+
+
+def test_approximation_ratio_rejects_non_positive_opt() -> None:
+    zero = Solution((0,), 0.0, 0, "dp")
+
+    with pytest.raises(ValueError, match="opt.value"):
+        approximation_ratio(zero, zero)
