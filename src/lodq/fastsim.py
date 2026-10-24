@@ -139,11 +139,27 @@ def optimize_fast(
     best and history are in the units of energies_scaled; history holds every objective
     value of the start that reached best.
     """
+    gammas, betas, best, history, _ = _optimize_fast(
+        energies_scaled, n, p, seed, n_starts, maxiter, warm_start
+    )
+    return gammas, betas, best, history
+
+
+def _optimize_fast(
+    energies_scaled: np.ndarray,
+    n: int,
+    p: int,
+    seed: int,
+    n_starts: int,
+    maxiter: int,
+    warm_start: tuple[np.ndarray, np.ndarray] | None,
+) -> tuple[np.ndarray, np.ndarray, float, list[float], int]:
+    """optimize_fast plus the total number of objective evaluations over all starts."""
     if p < 1:
         raise ValueError(f"p must be >= 1, got {p}")
     energies = np.asarray(energies_scaled, dtype=np.float64)
 
-    best_x, best_value, best_history = None, np.inf, []
+    best_x, best_value, best_history, n_evals = None, np.inf, [], 0
     for x0 in _starts(p, n_starts, seed, warm_start):
         history: list[float] = []
 
@@ -153,6 +169,7 @@ def optimize_fast(
             return value
 
         res = minimize(objective, x0, method="COBYLA", options={"maxiter": maxiter, "rhobeg": 0.3})
+        n_evals += len(history)
         if res.fun < best_value:
             best_x, best_value, best_history = res.x, float(res.fun), history
-    return best_x[:p].copy(), best_x[p:].copy(), best_value, best_history
+    return best_x[:p].copy(), best_x[p:].copy(), best_value, best_history, n_evals

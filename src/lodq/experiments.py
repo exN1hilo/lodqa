@@ -216,6 +216,9 @@ def run_scene(prep: dict[str, Any], cfg: ExperimentConfig, runs_root: str) -> No
     """Sweep mixers, seeds, and p, skipping combinations that are already stored."""
     for mixer in cfg.mixers:
         qubo = _qubo_for_mixer(prep, mixer)
+        kwargs = _sweep_kwargs(cfg)
+        if cfg.backend == "fastsim" and qubo is prep["qubo"]:
+            kwargs["energies"] = prep["energies"]
         for seed in cfg.seeds:
             tags = [_tag(prep["name"], mixer, seed, depth) for depth in cfg.p_list]
             if all(run_exists(runs_root, tag) for tag in tags):
@@ -228,7 +231,7 @@ def run_scene(prep: dict[str, Any], cfg: ExperimentConfig, runs_root: str) -> No
                 if not run_exists(runs_root, tag)
             ]
             if len(missing) == len(cfg.p_list):
-                results = run_qaoa_sweep(qubo, list(cfg.p_list), seed, **_sweep_kwargs(cfg))
+                results = run_qaoa_sweep(qubo, list(cfg.p_list), seed, **kwargs)
                 for result in results:
                     _save_result(prep, cfg, runs_root, mixer, qubo, result, started)
                 continue
@@ -240,7 +243,7 @@ def run_scene(prep: dict[str, Any], cfg: ExperimentConfig, runs_root: str) -> No
                         warm = loaded
                     continue
                 warm_start = None if warm is None else _grow_angles(*warm, depth)
-                result = run_qaoa(qubo, depth, seed, warm_start=warm_start, **_sweep_kwargs(cfg))
+                result = run_qaoa(qubo, depth, seed, warm_start=warm_start, **kwargs)
                 _save_result(prep, cfg, runs_root, mixer, qubo, result, started)
                 warm = (result.gammas, result.betas)
 

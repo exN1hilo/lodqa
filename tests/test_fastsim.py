@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 from qiskit.quantum_info import SparsePauliOp, Statevector
@@ -11,14 +13,20 @@ from lodq.fastsim import (
     save_landscape,
 )
 from lodq.ising import ising_diagonal, qubo_to_ising
+from lodq.metrics import problem_from_scene
 from lodq.qaoa import (
     assemble_values,
     build_qaoa_circuit,
+    expectation_fn,
     linear_ramp_init,
+    make_estimator,
     normalize_operator,
+    run_qaoa,
     toy_problem,
+    transpile_for_aer,
 )
-from lodq.qubo import all_energies, build_qubo
+from lodq.qubo import Qubo, all_energies, bits_from_bitstring, build_qubo
+from lodq.scene import load_scene
 
 SMALL_OP = SparsePauliOp.from_list([("IIZ", -1.0), ("IZI", 0.4), ("ZZI", 0.7), ("ZIZ", -0.3)])
 
@@ -171,3 +179,106 @@ def test_save_landscape_round_trip(tmp_path, toy_energies: tuple[np.ndarray, int
         np.testing.assert_array_equal(data["gammas"], gammas)
         np.testing.assert_array_equal(data["betas"], betas)
         np.testing.assert_array_equal(data["L"], L)
+
+
+DEFAULT_SCENE = Path(__file__).resolve().parents[1] / "scenes" / "default.yaml"
+
+
+def _safe_qubo(v: np.ndarray, dw: np.ndarray, dW: int) -> Qubo:
+    return build_qubo(v, dw, dW, 1.5 * v.max(), 1.2 * (v - v[:, -1:]).max())
+
+
+def _toy_qubo() -> Qubo:
+    return _safe_qubo(*toy_problem())
+
+
+def _default_qubo() -> Qubo:
+    problem = problem_from_scene(load_scene(DEFAULT_SCENE))
+    return _safe_qubo(problem.v, problem.dw, problem.dW)
+
+
+@pytest.fixture(scope="module", params=["toy", "default"])
+def cross_check(request: pytest.FixtureRequest) -> dict:
+    qubo = _toy_qubo() if request.param == "toy" else _default_qubo()
+    op, const = qubo_to_ising(qubo)
+    cost, scale = normalize_operator(op)
+    energies = all_energies(qubo)
+    rng = np.random.default_rng(2024)
+    angles = [(rng.uniform(0, np.pi, 2), rng.uniform(-np.pi / 2, 0, 2)) for _ in range(3)]
+    return {
+        "name": request.param,
+        "qubo": qubo,
+        "cost": cost,
+        "const": const,
+        "scale": scale,
+        "energies": energies,
+        "scaled": (energies - const) / scale,
+        "circuit": build_qaoa_circuit(cost, 2),
+        "angles": angles,
+    }
+
+
+def test_default_scene_has_19_qubits() -> None:
+    assert _default_qubo().n == 19
+
+
+def test_expectation_matches_aer_estimator(cross_check: dict) -> None:
+    c = cross_check
+    circuit_t = transpile_for_aer(c["circuit"], seed=0)
+    fn = expectation_fn(circuit_t, c["cost"], make_estimator("aer", seed=0), slow_eval_s=1e9)
+    for gammas, betas in c["angles"]:
+        aer = c["scale"] * fn(np.concatenate((gammas, betas))) + c["const"]
+        psi = qaoa_state(c["scaled"], gammas, betas, c["qubo"].n)
+        assert expectation(psi, c["energies"]) == pytest.approx(aer, abs=1e-6)
+
+
+def test_distribution_matches_statevector(cross_check: dict) -> None:
+    c = cross_check
+    n, circuit = c["qubo"].n, c["circuit"]
+    weights = 1 << np.arange(n)
+    for gammas, betas in c["angles"]:
+        bound = circuit.assign_parameters(assemble_values(circuit, gammas, betas))
+        reference = np.zeros(1 << n)
+        for bitstring, prob in Statevector(bound).probabilities_dict().items():
+            reference[int(bits_from_bitstring(bitstring, n) @ weights)] = prob
+        fast = probabilities(qaoa_state(c["scaled"], gammas, betas, n))
+        assert 0.5 * np.abs(fast - reference).sum() < 1e-6
+
+
+def test_run_qaoa_fastsim_result() -> None:
+    qubo = _toy_qubo()
+    op, const = qubo_to_ising(qubo)
+    _, scale = normalize_operator(op)
+    energies = all_energies(qubo)
+    result = run_qaoa(qubo, p=2, seed=0, n_starts=3, maxiter=100, shots=256, backend="fastsim")
+
+    assert result.backend == "fastsim"
+    assert sum(result.counts.values()) == 256
+    assert all(len(bitstring) == qubo.n for bitstring in result.counts)
+    assert result.best_expectation == pytest.approx(min(result.energy_history))
+    assert result.n_evals >= len(result.energy_history)
+    psi = qaoa_state((energies - const) / scale, result.gammas, result.betas, qubo.n)
+    assert expectation(psi, energies) == pytest.approx(result.best_expectation, abs=1e-9)
+    gammas, betas, best, _ = optimize_fast(
+        (energies - const) / scale, qubo.n, 2, seed=0, n_starts=3, maxiter=100
+    )
+    np.testing.assert_allclose(result.gammas, gammas)
+    np.testing.assert_allclose(result.betas, betas)
+    assert result.best_expectation == pytest.approx(scale * best + const)
+
+
+def test_run_qaoa_fastsim_uses_given_energies() -> None:
+    qubo = _toy_qubo()
+    kw = {"p": 1, "seed": 1, "n_starts": 2, "maxiter": 50, "shots": 64, "backend": "fastsim"}
+    computed = run_qaoa(qubo, **kw)
+    given = run_qaoa(qubo, energies=all_energies(qubo), **kw)
+    np.testing.assert_array_equal(computed.gammas, given.gammas)
+    assert computed.counts == given.counts
+
+
+def test_run_qaoa_fastsim_rejects_bad_input() -> None:
+    qubo = _toy_qubo()
+    with pytest.raises(ValueError, match="energies must have shape"):
+        run_qaoa(qubo, p=1, seed=0, backend="fastsim", energies=np.zeros(3))
+    with pytest.raises(ValueError, match="objective='energy'"):
+        run_qaoa(qubo, p=1, seed=0, backend="fastsim", objective="cvar")
