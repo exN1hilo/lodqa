@@ -47,3 +47,14 @@ def build_qubo(v: np.ndarray, dw: np.ndarray, dW: int, A: float, B: float) -> Qu
         A=A,
         B=B,
     )
+
+
+def energy(bits: np.ndarray, qubo: Qubo) -> np.ndarray | float:
+    values = np.asarray(bits, dtype=np.float64)
+    single = values.ndim == 1
+    batch = np.atleast_2d(values)
+    upper = np.triu(qubo.Q, k=1)
+    linear = batch @ np.diag(qubo.Q)
+    quadratic = np.einsum("bi,ij,bj->b", batch, upper, batch)
+    result = linear + quadratic + qubo.offset
+    return float(result[0]) if single else result
