@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from lodq.classical import dp_solve, greedy_solve
 from lodq.config import ExperimentConfig, dump_config, load_config
@@ -35,7 +36,7 @@ from lodq.qubo import (
     load_energies,
 )
 from lodq.scene import load_scene
-from lodq.storage import load_runs, run_exists, save_run
+from lodq.storage import load_runs, run_exists, runs_to_dataframe, save_run
 
 
 def _penalties(name: str, problem: Any, cfg: ExperimentConfig, dp: Any) -> tuple[float, float]:
@@ -261,6 +262,27 @@ def estimate_time(prep: dict[str, Any], cfg: ExperimentConfig) -> float:
     return mean * grid
 
 
+def write_summary(runs_root: str) -> Path:
+    """Average and standard deviation of metric columns, grouped by scene, mixer, and p."""
+    frame = runs_to_dataframe(load_runs(runs_root))
+    path = Path(runs_root) / "summary.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if frame.empty:
+        path.write_text("", encoding="utf-8")
+        return path
+    keys = ["scene", "qaoa.mixer", "qaoa.p"]
+    value_cols = [
+        column
+        for column in frame.columns
+        if column.startswith(("metrics.", "metrics_exact."))
+        and pd.api.types.is_numeric_dtype(frame[column])
+    ]
+    summary = frame.groupby(keys, dropna=False)[value_cols].agg(["mean", "std"])
+    summary.columns = [f"{name}_{stat}" for name, stat in summary.columns]
+    summary.reset_index().to_csv(path, index=False)
+    return path
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run the LOD QAOA experiment grid")
     parser.add_argument("--config", required=True)
@@ -288,6 +310,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     for name in scenes:
         run_scene(prepare_scene(name, cfg), cfg, args.runs_root)
+    write_summary(args.runs_root)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,17 @@
+name: main_random
+scene_presets:
+  - random_000
+  - random_001
+  - random_002
+  - random_003
+  - random_004
+  - random_005
+  - random_006
+  - random_007
+  - random_008
+  - random_009
+p_list: [1, 2, 3, 4]
+mixers: [x]
+seeds: [0, 1, 2]
+shots: 4096
+backend: fastsim
