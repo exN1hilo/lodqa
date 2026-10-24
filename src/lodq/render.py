@@ -5,6 +5,7 @@ from fnmatch import fnmatchcase
 from math import sqrt
 from pathlib import Path
 
+import numpy as np
 import pyvista as pv
 from matplotlib.font_manager import findfont
 
@@ -140,5 +141,70 @@ def compare_render(
         plotter.screenshot(out)
 
 
+def compare_zoom(
+    scene_path: str | Path,
+    out: str | Path = "figures/compare_zoom.png",
+) -> None:
+    scene = load_scene(scene_path)
+    problem = problem_from_scene(scene)
+    dp = dp_solve(problem.v, problem.dw, problem.dW)
+    greedy = greedy_solve(problem.v, problem.dw, problem.dW)
+    camera_position = np.asarray(scene.camera.position, dtype=np.float64)
+    centers = np.array([obj.position for obj in scene.objects], dtype=np.float64)
+    distances = np.linalg.norm(centers - camera_position, axis=1)
+    index = min(
+        range(scene.n_objects),
+        key=lambda i: (-abs(greedy.choice[i] - dp.choice[i]), float(distances[i]), i),
+    )
+    obj = scene.objects[index]
+    center = centers[index]
+    direction = (
+        (camera_position - center) / distances[index]
+        if distances[index] > 0
+        else np.array([0.0, 0.0, -1.0])
+    )
+    zoom_camera = Camera(
+        position=tuple(float(value) for value in center + 3 * obj.radius * direction),
+        target=obj.position,
+    )
+
+    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
+        try:
+            pv.start_xvfb()
+        except (AttributeError, OSError, RuntimeError):
+            pass
+
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    font_file = findfont("DejaVu Sans")
+    with closing(pv.Plotter(shape=(1, 2), window_size=(1600, 900), off_screen=True)) as plotter:
+        plotter.set_background("white")
+        for column, (method, j) in enumerate(
+            (("Greedy", greedy.choice[index]), ("DP", dp.choice[index]))
+        ):
+            plotter.subplot(0, column)
+            plotter.add_mesh(
+                load_lod_mesh(obj, j),
+                color=LOD_COLORS[j],
+                show_edges=True,
+                edge_color="#333333",
+                line_width=0.3,
+                smooth_shading=True,
+            )
+            count = f"{obj.tri_counts[j]:,}".replace(",", " ")
+            plotter.add_text(
+                f"{method}: LOD{j}, {count} треугольников",
+                position="upper_edge",
+                font_size=14,
+                font_file=font_file,
+            )
+            set_camera(plotter, zoom_camera)
+            if np.isclose(abs(direction[1]), 1.0):
+                plotter.camera.up = (0, 0, 1)
+            plotter.reset_camera_clipping_range()
+        plotter.screenshot(out)
+
+
 if __name__ == "__main__":
     compare_render()
+    compare_zoom("scenes/greedy_trap_1.yaml")

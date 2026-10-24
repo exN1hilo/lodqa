@@ -200,3 +200,5 @@ def test_render_module_creates_default_comparison(scene_path: Path, tmp_path: Pa
     assert result.returncode == 0, result.stdout + result.stderr
     with Image.open(tmp_path / "figures" / "compare_render.png") as image:
         assert image.size == (1920, 1080)
+    with Image.open(tmp_path / "figures" / "compare_zoom.png") as image:
+        assert image.size == (1600, 900)
