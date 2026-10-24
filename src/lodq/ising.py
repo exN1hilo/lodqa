@@ -1,1 +1,0 @@
-"""QUBO → SparsePauliOp (T13)."""

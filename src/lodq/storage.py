@@ -1,5 +1,3 @@
-"""Запись и чтение прогонов в runs/ (T02)."""
-
 import json
 import re
 import subprocess
@@ -86,7 +84,6 @@ def _run_dirs(root: str | Path) -> list[tuple[str, Path]]:
 
 
 def save_run(run: dict, tag: str, root: str | Path = "runs") -> Path:
-    """Пишет <root>/<YYYYmmdd-HHMMSS>-<tag>/run.json (+ arrays.npz) и возвращает папку прогона."""
     if not TAG_RE.fullmatch(tag):
         raise ValueError(f"недопустимый tag {tag!r}: только латиница, цифры и символы . _ -")
     now = datetime.now().astimezone()
@@ -135,5 +132,4 @@ def _flatten(data: dict, keep: Collection[str], prefix: str = "") -> dict[str, A
 
 
 def runs_to_dataframe(runs: list[dict], keep: Collection[str] = ("counts",)) -> pd.DataFrame:
-    """Одна строка на прогон; вложенные dict → колонки через точку, кроме ключей из keep."""
     return pd.DataFrame([_flatten(run, keep) for run in runs])

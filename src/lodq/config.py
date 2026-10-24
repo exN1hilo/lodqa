@@ -1,5 +1,3 @@
-"""Конфиг экспериментов (pydantic), загрузка YAML (T02)."""
-
 from pathlib import Path
 from typing import Annotated, Any, Literal
 

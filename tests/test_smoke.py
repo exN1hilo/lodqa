@@ -1,4 +1,3 @@
-import lodq
 import numpy
 import pandas
 import pydantic
@@ -8,6 +7,8 @@ import qiskit_aer
 import scipy
 import yaml
 from qiskit_aer.primitives import SamplerV2
+
+import lodq
 
 
 def test_imports() -> None:
