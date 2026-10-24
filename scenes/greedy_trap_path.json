@@ -1,0 +1,579 @@
+{
+  "scene": "greedy_trap_1",
+  "frames": [
+    {
+      "frame": 0,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -16.44263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1478055547749073,
+      "greedy_value": 1.1478055547749073,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 1,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -15.94263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.146946040776919,
+      "greedy_value": 1.146946040776919,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 2,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -15.44263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1460968882793083,
+      "greedy_value": 1.1460968882793083,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 3,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -14.94263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1452627393590638,
+      "greedy_value": 1.1452627393590638,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 4,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -14.44263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1444489680379573,
+      "greedy_value": 1.1444489680379573,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 5,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -13.94263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1436617780928102,
+      "greedy_value": 1.1436617780928102,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 6,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -13.44263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1429083110139318,
+      "greedy_value": 1.1429083110139318,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 7,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -12.94263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1421967640779782,
+      "greedy_value": 1.1421967640779782,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 8,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -12.44263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1415365179895944,
+      "greedy_value": 1.1415365179895944,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 9,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -11.94263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1409382728131647,
+      "greedy_value": 1.1409382728131647,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 10,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -11.44263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1404141898998543,
+      "greedy_value": 1.1404141898998543,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 11,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -10.94263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1399780361463814,
+      "greedy_value": 1.1399780361463814,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 12,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -10.44263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1396453251288625,
+      "greedy_value": 1.1396453251288625,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 13,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -9.94263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1394334473733205,
+      "greedy_value": 1.1394334473733205,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 14,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -9.44263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1393617792138788,
+      "greedy_value": 1.1393617792138788,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 15,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -8.94263624896741
+      ],
+      "ar_greedy": 1.0,
+      "dp_value": 1.1394517563604707,
+      "greedy_value": 1.1394517563604707,
+      "dp_used": 10,
+      "greedy_used": 10,
+      "budget": 10
+    },
+    {
+      "frame": 16,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -8.44263624896741
+      ],
+      "ar_greedy": 0.8607182211162989,
+      "dp_value": 1.1397268945475576,
+      "greedy_value": 0.9809837052333774,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 17,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -7.9426362489674105
+      ],
+      "ar_greedy": 0.8613301577411958,
+      "dp_value": 1.1402127356979481,
+      "greedy_value": 0.9820996154972341,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 18,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -7.4426362489674105
+      ],
+      "ar_greedy": 0.8622341030631326,
+      "dp_value": 1.140936694339498,
+      "greedy_value": 0.9837545272956326,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 19,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -6.9426362489674105
+      ],
+      "ar_greedy": 0.8634628977985165,
+      "dp_value": 1.1419277762368527,
+      "greedy_value": 0.9860122667460888,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 20,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -6.4426362489674105
+      ],
+      "ar_greedy": 0.8650493435286682,
+      "dp_value": 1.1432161403139638,
+      "greedy_value": 0.9889383716899722,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 21,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -5.9426362489674105
+      ],
+      "ar_greedy": 0.8670250326145046,
+      "dp_value": 1.1448324771893685,
+      "greedy_value": 0.9925984158732564,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 22,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -5.4426362489674105
+      ],
+      "ar_greedy": 0.8694188929076239,
+      "dp_value": 1.1468071844330798,
+      "greedy_value": 0.9970558326683174,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 23,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -4.9426362489674105
+      ],
+      "ar_greedy": 0.8722554685960272,
+      "dp_value": 1.1491693312945632,
+      "greedy_value": 1.0023692335645225,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 24,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -4.4426362489674105
+      ],
+      "ar_greedy": 0.8755529989899097,
+      "dp_value": 1.1519454249154206,
+      "greedy_value": 1.0085892714574023,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 25,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -3.9426362489674105
+      ],
+      "ar_greedy": 0.8793214066319407,
+      "dp_value": 1.155158015520712,
+      "greedy_value": 1.0157551710898336,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 26,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -3.4426362489674105
+      ],
+      "ar_greedy": 0.8835603592224458,
+      "dp_value": 1.158824207476761,
+      "greedy_value": 1.023891133033833,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 27,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -2.9426362489674105
+      ],
+      "ar_greedy": 0.8882576167528341,
+      "dp_value": 1.1629541716589522,
+      "greedy_value": 1.0330029009105473,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 28,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -2.4426362489674105
+      ],
+      "ar_greedy": 0.8933879026418069,
+      "dp_value": 1.1675497751147697,
+      "greedy_value": 1.0430748448196974,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 29,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -1.9426362489674105
+      ],
+      "ar_greedy": 0.8989125310720499,
+      "dp_value": 1.1726034480473682,
+      "greedy_value": 1.0540679334280727,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 30,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -1.4426362489674105
+      ],
+      "ar_greedy": 0.9047799707722408,
+      "dp_value": 1.1780973884498158,
+      "greedy_value": 1.0659189206884776,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 31,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -0.9426362489674105
+      ],
+      "ar_greedy": 0.9109274254716004,
+      "dp_value": 1.1840031591741276,
+      "greedy_value": 1.0785409495367295,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 32,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        -0.4426362489674105
+      ],
+      "ar_greedy": 0.9172833737956854,
+      "dp_value": 1.1902816679017147,
+      "greedy_value": 1.0918255841000404,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 33,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        0.057363751032589505
+      ],
+      "ar_greedy": 0.9237708615069913,
+      "dp_value": 1.196883455844967,
+      "greedy_value": 1.1056460611293701,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 34,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        0.5573637510325895
+      ],
+      "ar_greedy": 0.9303112114347044,
+      "dp_value": 1.2037491835736718,
+      "greedy_value": 1.119861361233959,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 35,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        1.0573637510325895
+      ],
+      "ar_greedy": 0.9368277451836896,
+      "dp_value": 1.210810220184543,
+      "greedy_value": 1.1343206084208521,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 36,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        1.5573637510325895
+      ],
+      "ar_greedy": 0.9432491165001734,
+      "dp_value": 1.217989329705591,
+      "greedy_value": 1.1488673591514371,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 37,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        2.0573637510325895
+      ],
+      "ar_greedy": 0.9495119375804854,
+      "dp_value": 1.2252015921264536,
+      "greedy_value": 1.1633435376666845,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 38,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        2.5573637510325895
+      ],
+      "ar_greedy": 0.9555625128414316,
+      "dp_value": 1.2323558446651335,
+      "greedy_value": 1.1775930476430398,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 39,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        3.0573637510325895
+      ],
+      "ar_greedy": 0.9613576428546111,
+      "dp_value": 1.2393570010484134,
+      "greedy_value": 1.1914653251832625,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    },
+    {
+      "frame": 40,
+      "camera_position": [
+        5.172267390033884,
+        2.0,
+        3.5573637510325913
+      ],
+      "ar_greedy": 0.96686458874815,
+      "dp_value": 1.246109521685261,
+      "greedy_value": 1.2048191702193736,
+      "dp_used": 10,
+      "greedy_used": 8,
+      "budget": 10
+    }
+  ]
+}

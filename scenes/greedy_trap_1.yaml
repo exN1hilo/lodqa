@@ -1,0 +1,89 @@
+name: greedy_trap_1
+budget_W: 70838
+block_size: 5000
+camera:
+  position:
+  - 5.172267390033884
+  - 2.0
+  - -6.442636248967409
+  target:
+  - 0.0
+  - 0.0
+  - 10.0
+  fov_deg: 60.0
+objects:
+- name: bunny
+  position:
+  - 18.248506268409002
+  - -11.205411146122499
+  - 1.6362493511689244
+  radius: 0.6835572076991736
+  importance: 1.262919185114131
+  tri_counts:
+  - 46153
+  - 18461
+  - 4615
+  mesh_paths:
+  - assets/lods/bunny_lod0.ply
+  - assets/lods/bunny_lod1.ply
+  - assets/lods/bunny_lod2.ply
+- name: dragon
+  position:
+  - -2.181997883203166
+  - -3.2947001024740716
+  - 0.29935115066903784
+  radius: 2.3740763107459184
+  importance: 0.7035504408898786
+  tri_counts:
+  - 29259
+  - 11704
+  - 2926
+  mesh_paths:
+  - assets/lods/dragon_lod0.ply
+  - assets/lods/dragon_lod1.ply
+  - assets/lods/dragon_lod2.ply
+- name: teapot
+  position:
+  - -1.7549942043915423
+  - 0.5277915850809967
+  - 4.578154320537255
+  radius: 1.0323175127559263
+  importance: 0.9844793488940827
+  tri_counts:
+  - 59875
+  - 23950
+  - 5988
+  mesh_paths:
+  - assets/lods/teapot_lod0.ply
+  - assets/lods/teapot_lod1.ply
+  - assets/lods/teapot_lod2.ply
+- name: armadillo
+  position:
+  - 6.53453810842159
+  - 11.547363117702666
+  - -2.7001234881976677
+  radius: 2.6423942283565456
+  importance: 1.630783865385284
+  tri_counts:
+  - 50210
+  - 20084
+  - 5021
+  mesh_paths:
+  - assets/lods/armadillo_lod0.ply
+  - assets/lods/armadillo_lod1.ply
+  - assets/lods/armadillo_lod2.ply
+- name: lucy
+  position:
+  - -1.610124012910046
+  - 12.767494169393075
+  - 4.03268935066345
+  radius: 2.109601746666211
+  importance: 0.9470974522314372
+  tri_counts:
+  - 22884
+  - 9154
+  - 2288
+  mesh_paths:
+  - assets/lods/lucy_lod0.ply
+  - assets/lods/lucy_lod1.ply
+  - assets/lods/lucy_lod2.ply
