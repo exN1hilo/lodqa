@@ -1,8 +1,50 @@
 import numpy as np
 import pytest
 
-from lodq.classical import Solution, brute_force, enumerate_feasible, evaluate_choice
+from lodq.classical import Solution, _dp_table, brute_force, enumerate_feasible, evaluate_choice
 from lodq.metrics import toy_trap_problem
+
+
+def _reconstruct_choice(
+    choice_ptr: np.ndarray,
+    dw: np.ndarray,
+    used: int,
+) -> tuple[int, ...]:
+    n_objects = choice_ptr.shape[0]
+    choice = [0] * n_objects
+    budget = used
+    for i in range(n_objects - 1, -1, -1):
+        lod = int(choice_ptr[i, budget])
+        choice[i] = lod
+        budget -= int(dw[i, lod])
+    return tuple(choice)
+
+
+def test_dp_table_trap_fixture() -> None:
+    problem = toy_trap_problem()
+
+    dp, choice_ptr = _dp_table(problem.v, problem.dw, problem.dW)
+
+    assert dp.shape == (problem.N + 1, problem.dW + 1)
+    assert dp.dtype == np.float64
+    assert choice_ptr.shape == (problem.N, problem.dW + 1)
+    assert np.issubdtype(choice_ptr.dtype, np.integer)
+    assert dp[0, 0] == 0.0
+    assert np.isneginf(dp[0, 1:]).all()
+    assert dp[problem.N, 10] == pytest.approx(1.47)
+    assert _reconstruct_choice(choice_ptr, problem.dw, 10) == (2, 0, 0, 2, 2)
+
+
+def test_dp_table_prefers_smaller_j_on_value_ties() -> None:
+    utility = np.array([[1.0, 1.0], [1.0, 1.0]], dtype=np.float64)
+    weights = np.array([[1, 1], [0, 0]], dtype=np.int64)
+
+    dp, choice_ptr = _dp_table(utility, weights, 1)
+
+    assert dp[1, 1] == pytest.approx(1.0)
+    assert choice_ptr[0, 1] == 0
+    assert choice_ptr[1, 1] == 0
+    assert _reconstruct_choice(choice_ptr, weights, 1) == (0, 0)
 
 
 def test_brute_force_solves_trap_fixture() -> None:

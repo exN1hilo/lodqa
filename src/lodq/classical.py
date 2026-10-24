@@ -37,6 +37,43 @@ def _validate_problem(
     return utility, weights.astype(np.int64, copy=False)
 
 
+def _dp_table(
+    v: NDArray[np.float64],
+    dw: NDArray[np.int64],
+    dW: int,
+) -> tuple[NDArray[np.float64], NDArray[np.int64]]:
+    """Exact-budget MCKP DP table and argmax pointers.
+
+    dp[i, b] is the best value using the first i objects with used budget
+    exactly b. Unreachable states are -inf; dp[0, 0] = 0. choice_ptr[i, b]
+    stores the chosen LOD j for object i at budget b (smaller j on ties).
+    """
+    utility, weights = _validate_problem(v, dw, dW)
+    n_objects, n_lods = utility.shape
+    n_budgets = int(dW) + 1
+
+    dp = np.full((n_objects + 1, n_budgets), -np.inf, dtype=np.float64)
+    dp[0, 0] = 0.0
+    choice_ptr = np.full((n_objects, n_budgets), -1, dtype=np.int64)
+
+    for i in range(n_objects):
+        prev = dp[i]
+        row = np.full(n_budgets, -np.inf, dtype=np.float64)
+        chosen = np.full(n_budgets, -1, dtype=np.int64)
+        for j in range(n_lods):
+            cost = int(weights[i, j])
+            if cost >= n_budgets:
+                continue
+            candidate = prev[: n_budgets - cost] + utility[i, j]
+            better = candidate > row[cost:]
+            row[cost:] = np.where(better, candidate, row[cost:])
+            chosen[cost:] = np.where(better, j, chosen[cost:])
+        dp[i + 1] = row
+        choice_ptr[i] = chosen
+
+    return dp, choice_ptr
+
+
 def evaluate_choice(
     choice: tuple[int, ...],
     v: NDArray[np.float64],
