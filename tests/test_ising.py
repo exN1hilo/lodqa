@@ -242,3 +242,30 @@ def test_summary_of_zero_qubo() -> None:
 def test_summary_rejects_non_ising_operator() -> None:
     with pytest.raises(ValueError, match="только из I и Z"):
         summary(SparsePauliOp.from_list([("XZ", 1.0)]))
+
+
+def test_matches_qiskit_optimization(trap: Problem) -> None:
+    pytest.importorskip("qiskit_optimization")
+    from qiskit_optimization import QuadraticProgram
+    from qiskit_optimization.converters import QuadraticProgramToQubo
+
+    names = [f"x_{i}_{j}" for i in range(trap.N) for j in range(trap.M)]
+    qp = QuadraticProgram()
+    for name in names:
+        qp.binary_var(name)
+    qp.maximize(linear=dict(zip(names, trap.v.ravel().tolist(), strict=True)))
+    for i in range(trap.N):
+        qp.linear_constraint({names[i * trap.M + j]: 1 for j in range(trap.M)}, "==", 1)
+    qp.linear_constraint(dict(zip(names, trap.dw.ravel().tolist(), strict=True)), "<=", trap.dW)
+    converted = QuadraticProgramToQubo().convert(qp)
+    op, const = converted.to_ising()
+
+    x = np.random.default_rng(3).integers(0, 2, size=(50, converted.get_num_vars()))
+    expected = [converted.objective.evaluate(row) for row in x]
+    np.testing.assert_allclose(ising_diagonal(op, const, x), expected, atol=1e-9, rtol=0)
+
+    bits, value = ground_state(op, const)
+    blocks = bits[: trap.N * trap.M].reshape(trap.N, trap.M)
+    assert np.all(blocks.sum(axis=1) == 1)
+    assert tuple(blocks.argmax(axis=1)) == brute_force(trap.v, trap.dw, trap.dW).choice
+    assert value == pytest.approx(-1.47, abs=1e-9, rel=0)
