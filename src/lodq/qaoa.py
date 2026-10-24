@@ -2,9 +2,11 @@ import re
 
 import numpy as np
 from qiskit import QuantumCircuit
-from qiskit.circuit import Parameter
+from qiskit.circuit import CircuitInstruction, Parameter
 from qiskit.circuit.library import qaoa_ansatz
 from qiskit.quantum_info import SparsePauliOp
+from qiskit.transpiler import generate_preset_pass_manager
+from qiskit_aer import AerSimulator
 
 PARAM_RE = re.compile(r"(?P<kind>[γβ])\[(?P<index>\d+)\]")
 
@@ -65,3 +67,26 @@ def assemble_values(circuit: QuantumCircuit, gammas: np.ndarray, betas: np.ndarr
     values = dict(zip(gamma_params, gamma_values, strict=True))
     values |= dict(zip(beta_params, beta_values, strict=True))
     return np.array([values[param] for param in circuit.parameters], dtype=np.float64)
+
+
+def transpile_for_aer(circuit: QuantumCircuit, seed: int) -> QuantumCircuit:
+    pass_manager = generate_preset_pass_manager(
+        optimization_level=1,
+        backend=AerSimulator(method="statevector"),
+        seed_transpiler=seed,
+    )
+    return pass_manager.run(circuit)
+
+
+def _is_two_qubit(instruction: CircuitInstruction) -> bool:
+    return instruction.operation.num_qubits == 2
+
+
+def circuit_stats(circuit: QuantumCircuit) -> dict[str, int | dict[str, int]]:
+    return {
+        "num_qubits": circuit.num_qubits,
+        "depth": circuit.depth(),
+        "depth_2q": circuit.depth(_is_two_qubit),
+        "n_2q": sum(1 for instruction in circuit.data if _is_two_qubit(instruction)),
+        "count_ops": dict(circuit.count_ops()),
+    }

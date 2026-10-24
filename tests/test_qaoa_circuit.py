@@ -3,11 +3,19 @@ import pytest
 from qiskit import QuantumCircuit
 from qiskit.circuit import Parameter, ParameterVector
 from qiskit.quantum_info import SparsePauliOp, Statevector
+from qiskit_aer import AerSimulator
 from scipy.linalg import expm
 
 from lodq.ising import ising_diagonal, qubo_to_ising, summary
 from lodq.metrics import Problem
-from lodq.qaoa import assemble_values, build_qaoa_circuit, normalize_operator, split_params
+from lodq.qaoa import (
+    assemble_values,
+    build_qaoa_circuit,
+    circuit_stats,
+    normalize_operator,
+    split_params,
+    transpile_for_aer,
+)
 from lodq.qubo import build_qubo
 
 SMALL_OP = SparsePauliOp.from_list([("IIZ", -1.0), ("IZI", 0.4), ("ZZI", 0.7), ("ZIZ", -0.3)])
@@ -158,3 +166,62 @@ def test_split_params_rejects_unpaired_layers() -> None:
     circuit.rx(beta[0], 0)
     with pytest.raises(ValueError, match="2 γ, 1 β"):
         split_params(circuit)
+
+
+@pytest.mark.parametrize("p", [1, 2, 3, 4])
+def test_transpile_for_aer_keeps_qubits_and_parameters(trap_op: SparsePauliOp, p: int) -> None:
+    circuit = transpile_for_aer(build_qaoa_circuit(trap_op, p), seed=0)
+    gammas, betas = split_params(circuit)
+
+    assert circuit.num_qubits == 19
+    assert [param.name for param in gammas] == [f"γ[{k}]" for k in range(p)]
+    assert [param.name for param in betas] == [f"β[{k}]" for k in range(p)]
+    supported = set(AerSimulator(method="statevector").target.operation_names)
+    assert set(circuit.count_ops()) <= supported
+
+
+def test_transpile_for_aer_preserves_state() -> None:
+    circuit = build_qaoa_circuit(SMALL_OP, 2)
+    transpiled = transpile_for_aer(circuit, seed=0)
+    gammas, betas = [0.8, -0.35], [0.45, 1.1]
+
+    expected = Statevector(circuit.assign_parameters(assemble_values(circuit, gammas, betas)))
+    actual = Statevector(transpiled.assign_parameters(assemble_values(transpiled, gammas, betas)))
+
+    assert actual.equiv(expected)
+
+
+def test_transpile_for_aer_is_deterministic(trap_op: SparsePauliOp) -> None:
+    circuit = build_qaoa_circuit(trap_op, 2)
+
+    first = transpile_for_aer(circuit, seed=11)
+    second = transpile_for_aer(circuit, seed=11)
+
+    assert circuit_stats(first) == circuit_stats(second)
+    assert first == second
+
+
+def test_circuit_stats_by_hand() -> None:
+    circuit = QuantumCircuit(3)
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.cx(1, 2)
+    circuit.rz(0.1, 2)
+    circuit.ccx(0, 1, 2)
+
+    assert circuit_stats(circuit) == {
+        "num_qubits": 3,
+        "depth": 5,
+        "depth_2q": 2,
+        "n_2q": 2,
+        "count_ops": {"h": 1, "cx": 2, "rz": 1, "ccx": 1},
+    }
+
+
+@pytest.mark.parametrize("p", [1, 2, 3, 4])
+def test_circuit_stats_on_19_qubits(trap_op: SparsePauliOp, p: int) -> None:
+    stats = circuit_stats(transpile_for_aer(build_qaoa_circuit(trap_op, p), seed=0))
+
+    assert stats["num_qubits"] == 19
+    assert stats["n_2q"] == stats["count_ops"]["rzz"] == 101 * p
+    assert 0 < stats["depth_2q"] < stats["depth"]
