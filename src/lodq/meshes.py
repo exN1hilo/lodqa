@@ -1,6 +1,8 @@
 import json
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import partial
 from itertools import pairwise
 from pathlib import Path
 
@@ -15,16 +17,38 @@ from lodq.scene import load_scene, save_scene, validate_scene
 @dataclass(frozen=True, slots=True)
 class MeshSource:
     load: Callable[[], pv.PolyData]
+    fallback: Callable[[], pv.PolyData]
     n_tris: int
     rotate_x: float = 0.0
 
 
 SOURCES: dict[str, MeshSource] = {
-    "bunny": MeshSource(examples.download_bunny, 40_000),
-    "dragon": MeshSource(examples.download_dragon, 44_000),
-    "teapot": MeshSource(examples.download_teapot, 36_000),
-    "armadillo": MeshSource(examples.download_armadillo, 42_000),
-    "lucy": MeshSource(examples.download_lucy, 46_000, rotate_x=-90.0),
+    "bunny": MeshSource(
+        examples.download_bunny,
+        partial(pv.ParametricEllipsoid, 1.0, 0.85, 0.75),
+        40_000,
+    ),
+    "dragon": MeshSource(
+        examples.download_dragon,
+        partial(pv.ParametricTorus, 1.0, 0.35),
+        44_000,
+    ),
+    "teapot": MeshSource(
+        examples.download_teapot,
+        partial(pv.ParametricSuperEllipsoid, 1.0, 0.7, 0.8, n1=0.6, n2=0.6),
+        36_000,
+    ),
+    "armadillo": MeshSource(
+        examples.download_armadillo,
+        partial(pv.ParametricSuperEllipsoid, 0.7, 1.0, 0.6, n1=0.4, n2=0.8),
+        42_000,
+    ),
+    "lucy": MeshSource(
+        examples.download_lucy,
+        partial(pv.ParametricEllipsoid, 0.45, 1.0, 0.35),
+        46_000,
+        rotate_x=-90.0,
+    ),
 }
 
 
@@ -76,14 +100,22 @@ def simplification_error(lod0: pv.PolyData, lodj: pv.PolyData) -> float:
     return float(hausdorff / (2 * radius))
 
 
-def base_meshes(sources: dict[str, MeshSource] = SOURCES) -> dict[str, pv.PolyData]:
-    meshes = {}
-    for name, source in sources.items():
+def load_source(name: str, source: MeshSource) -> pv.PolyData:
+    try:
         mesh = source.load()
-        if source.rotate_x:
-            mesh = mesh.rotate_x(source.rotate_x)
-        meshes[name] = prepare_mesh(mesh, source.n_tris)
-    return meshes
+    except OSError as err:
+        warnings.warn(
+            f"{name}: меш недоступен ({err}), используется параметрическая фигура", stacklevel=2
+        )
+        return source.fallback()
+    return mesh.rotate_x(source.rotate_x) if source.rotate_x else mesh
+
+
+def base_meshes(sources: dict[str, MeshSource] = SOURCES) -> dict[str, pv.PolyData]:
+    return {
+        name: prepare_mesh(load_source(name, source), source.n_tris)
+        for name, source in sources.items()
+    }
 
 
 def build_assets(

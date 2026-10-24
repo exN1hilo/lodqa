@@ -1,5 +1,7 @@
 import json
 import shutil
+import warnings
+from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
 
@@ -9,9 +11,11 @@ import pyvista as pv
 
 from lodq.meshes import (
     SOURCES,
+    MeshSource,
     base_meshes,
     bounding_sphere,
     build_assets,
+    load_source,
     make_lods,
     normalize_mesh,
     prepare_mesh,
@@ -257,6 +261,81 @@ def test_default_scene_matches_assets() -> None:
     w_base = sum(obj.tri_counts[-1] for obj in scene.objects)
     dW = (scene.budget_W - w_base) // scene.block_size
     assert 8 <= dW <= 15
+
+
+def offline(source: MeshSource) -> MeshSource:
+    def fail() -> pv.PolyData:
+        raise ConnectionError("нет сети")
+
+    return replace(source, load=fail)
+
+
+def test_load_source_fallback_offline() -> None:
+    with pytest.warns(UserWarning, match="bunny: меш недоступен"):
+        mesh = load_source("bunny", offline(SOURCES["bunny"]))
+    assert mesh.n_cells == SOURCES["bunny"].fallback().n_cells
+
+
+def test_load_source_online_no_fallback() -> None:
+    def broken_fallback() -> pv.PolyData:
+        raise AssertionError("fallback не должен вызываться")
+
+    source = MeshSource(shifted_sphere, broken_fallback, 2000)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert load_source("ball", source).n_cells == shifted_sphere().n_cells
+
+
+def test_load_source_keeps_other_errors() -> None:
+    def bug() -> pv.PolyData:
+        raise RuntimeError("ошибка в загрузчике")
+
+    with pytest.raises(RuntimeError):
+        load_source("ball", MeshSource(bug, shifted_sphere, 2000))
+
+
+def test_load_source_rotates_loaded_mesh() -> None:
+    def z_up() -> pv.PolyData:
+        return pv.Cylinder(direction=(0.0, 0.0, 1.0), height=4.0, radius=0.5)
+
+    mesh = load_source("tall", MeshSource(z_up, shifted_sphere, 2000, rotate_x=-90.0))
+    lo, hi = np.reshape(mesh.bounds, (3, 2)).T
+    assert np.argmax(hi - lo) == 1
+
+
+@pytest.mark.parametrize("name", list(SOURCES))
+def test_fallback_meshes(name: str) -> None:
+    with pytest.warns(UserWarning, match="параметрическая фигура"):
+        mesh = base_meshes({name: offline(SOURCES[name])})[name]
+    assert mesh.is_all_triangles
+    assert mesh.n_cells == pytest.approx(SOURCES[name].n_tris, rel=0.01)
+    assert_unit(mesh)
+    lods = make_lods(mesh)
+    assert all(high > low for high, low in pairwise(lod.n_cells for lod in lods))
+    errors = [simplification_error(lods[0], lod) for lod in lods]
+    assert errors[0] == 0.0 < errors[1] < errors[2]
+
+
+def test_fallback_lucy_is_upright() -> None:
+    with pytest.warns(UserWarning):
+        mesh = base_meshes({"lucy": offline(SOURCES["lucy"])})["lucy"]
+    lo, hi = np.reshape(mesh.bounds, (3, 2)).T
+    assert np.argmax(hi - lo) == 1
+
+
+def test_offline_pipeline(tmp_path: Path) -> None:
+    sources = {name: offline(source) for name, source in SOURCES.items()}
+    with pytest.warns(UserWarning):
+        meshes = base_meshes(sources)
+    assets = build_assets(tmp_path / "lods", meshes=meshes)
+    assert len(list((tmp_path / "lods").glob("*.ply"))) == 15
+
+    scene_path = tmp_path / "default.yaml"
+    shutil.copy(ROOT / "scenes" / "default.yaml", scene_path)
+    update_scene_with_assets(scene_path, assets)
+    scene = load_scene(scene_path)
+    w_base = sum(obj.tri_counts[-1] for obj in scene.objects)
+    assert 8 <= (scene.budget_W - w_base) // scene.block_size <= 15
 
 
 @pytest.fixture(scope="module")
