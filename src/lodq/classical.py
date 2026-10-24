@@ -1,4 +1,4 @@
-"""Точные классические методы для задачи выбора уровней детализации."""
+"""Exact classical solvers for the level-of-detail selection problem."""
 
 from dataclasses import dataclass
 from itertools import product

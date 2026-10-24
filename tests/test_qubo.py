@@ -160,7 +160,7 @@ def test_encode_decode_trap_choices(
 def test_encode_rejects_over_budget_choice() -> None:
     problem = toy_trap_problem()
     qubo = build_qubo(problem.v, problem.dw, problem.dW, 1.5, 1.2)
-    with pytest.raises(ValueError, match="Превышен бюджет"):
+    with pytest.raises(ValueError, match="Budget exceeded"):
         encode((0, 0, 0, 0, 0), qubo, problem.dw)
 
 
@@ -229,13 +229,13 @@ def test_bitstring_round_trip(s: str) -> None:
 
 @pytest.mark.parametrize("s, n", [("101", 2), ("101", 4), ("", 1)])
 def test_bits_from_bitstring_rejects_wrong_length(s: str, n: int) -> None:
-    with pytest.raises(ValueError, match="Длина"):
+    with pytest.raises(ValueError, match="length"):
         bits_from_bitstring(s, n)
 
 
 @pytest.mark.parametrize("s", ["10x", "102", "1 0"])
 def test_bits_from_bitstring_rejects_nonbinary_characters(s: str) -> None:
-    with pytest.raises(ValueError, match="только 0 и 1"):
+    with pytest.raises(ValueError, match="only 0 and 1"):
         bits_from_bitstring(s, len(s))
 
 

@@ -46,7 +46,7 @@ def test_normalize_mesh() -> None:
 
 def test_normalize_degenerate() -> None:
     mesh = pv.PolyData(np.ones((3, 3)), faces=[3, 0, 1, 2])
-    with pytest.raises(ValueError, match="вырожден"):
+    with pytest.raises(ValueError, match="degenerate"):
         normalize_mesh(mesh)
 
 
@@ -145,7 +145,7 @@ def test_bounding_sphere() -> None:
 
 
 def test_bounding_sphere_empty() -> None:
-    with pytest.raises(ValueError, match="пустой"):
+    with pytest.raises(ValueError, match="empty"):
         bounding_sphere(pv.PolyData())
 
 
@@ -175,7 +175,7 @@ def test_error_grows_with_lod() -> None:
 
 
 def test_error_empty_lod() -> None:
-    with pytest.raises(ValueError, match="пустой"):
+    with pytest.raises(ValueError, match="empty"):
         simplification_error(prepare_mesh(shifted_sphere(), 2000), pv.PolyData())
 
 
@@ -240,7 +240,7 @@ def test_update_scene_rejects_invalid(tmp_path: Path) -> None:
     bad = {
         "bunny": {"tri_counts": [100, 200, 50], "errors": [0, 0, 0], "mesh_paths": ["a", "b", "c"]}
     }
-    with pytest.raises(ValueError, match="убывать"):
+    with pytest.raises(ValueError, match="decreasing"):
         update_scene_with_assets(path, bad)
     assert path.read_text(encoding="utf-8") == text
 
@@ -265,20 +265,20 @@ def test_default_scene_matches_assets() -> None:
 
 def offline(source: MeshSource) -> MeshSource:
     def fail() -> pv.PolyData:
-        raise ConnectionError("нет сети")
+        raise ConnectionError("no network")
 
     return replace(source, load=fail)
 
 
 def test_load_source_fallback_offline() -> None:
-    with pytest.warns(UserWarning, match="bunny: меш недоступен"):
+    with pytest.warns(UserWarning, match="bunny: mesh unavailable"):
         mesh = load_source("bunny", offline(SOURCES["bunny"]))
     assert mesh.n_cells == SOURCES["bunny"].fallback().n_cells
 
 
 def test_load_source_online_no_fallback() -> None:
     def broken_fallback() -> pv.PolyData:
-        raise AssertionError("fallback не должен вызываться")
+        raise AssertionError("fallback must not be called")
 
     source = MeshSource(shifted_sphere, broken_fallback, 2000)
     with warnings.catch_warnings():
@@ -288,7 +288,7 @@ def test_load_source_online_no_fallback() -> None:
 
 def test_load_source_keeps_other_errors() -> None:
     def bug() -> pv.PolyData:
-        raise RuntimeError("ошибка в загрузчике")
+        raise RuntimeError("loader error")
 
     with pytest.raises(RuntimeError):
         load_source("ball", MeshSource(bug, shifted_sphere, 2000))
@@ -305,7 +305,7 @@ def test_load_source_rotates_loaded_mesh() -> None:
 
 @pytest.mark.parametrize("name", list(SOURCES))
 def test_fallback_meshes(name: str) -> None:
-    with pytest.warns(UserWarning, match="параметрическая фигура"):
+    with pytest.warns(UserWarning, match="parametric shape"):
         mesh = base_meshes({name: offline(SOURCES[name])})[name]
     assert mesh.is_all_triangles
     assert mesh.n_cells == pytest.approx(SOURCES[name].n_tris, rel=0.01)

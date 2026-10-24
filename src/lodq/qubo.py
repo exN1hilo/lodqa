@@ -66,11 +66,11 @@ def energy(bits: np.ndarray, qubo: Qubo) -> np.ndarray | float:
 def encode(choice: tuple[int, ...], qubo: Qubo, dw: np.ndarray) -> np.ndarray:
     levels = np.asarray(choice, dtype=np.intp)
     if levels.shape != (qubo.N,) or np.any((levels < 0) | (levels >= qubo.M)):
-        raise ValueError("choice должен содержать по одному допустимому индексу LOD на объект")
+        raise ValueError("choice must contain one valid LOD index per object")
     rows = np.arange(qubo.N)
     used = int(np.asarray(dw)[rows, levels].sum())
     if used > qubo.dW:
-        raise ValueError(f"Превышен бюджет: использовано {used}, доступно {qubo.dW}")
+        raise ValueError(f"Budget exceeded: used {used}, available {qubo.dW}")
 
     bits = np.zeros(qubo.n, dtype=np.int8)
     bits[rows * qubo.M + levels] = 1
@@ -100,16 +100,16 @@ def is_feasible(bits: np.ndarray, qubo: Qubo, dw: np.ndarray) -> bool:
 
 def bits_from_bitstring(s: str, n: int) -> np.ndarray:
     if len(s) != n:
-        raise ValueError(f"Длина битовой строки должна быть {n}, получено {len(s)}")
+        raise ValueError(f"Bitstring length must be {n}, got {len(s)}")
     if any(bit not in "01" for bit in s):
-        raise ValueError("Битовая строка должна содержать только 0 и 1")
+        raise ValueError("Bitstring must contain only 0 and 1")
     return np.fromiter((int(bit) for bit in reversed(s)), dtype=np.int8, count=n)
 
 
 def bitstring_from_bits(bits: np.ndarray) -> str:
     values = np.asarray(bits)
     if values.ndim != 1 or not np.all((values == 0) | (values == 1)):
-        raise ValueError("bits должен быть одномерным массивом из 0 и 1")
+        raise ValueError("bits must be a 1-D array of 0 and 1")
     return "".join(str(int(bit)) for bit in values[::-1])
 
 

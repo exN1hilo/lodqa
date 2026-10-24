@@ -51,7 +51,7 @@ def _split_arrays(data: dict, prefix: str = "") -> tuple[dict, dict[str, np.ndar
         if isinstance(key, str) and key.endswith(ARRAY_SUFFIX):
             arr = np.asarray(value)
             if arr.dtype.kind not in "biufc":
-                raise TypeError(f"{path}: массив должен быть числовым")
+                raise TypeError(f"{path}: array must be numeric")
             arrays[path] = arr
         elif isinstance(value, dict):
             clean[key], nested = _split_arrays(value, f"{path}.")
@@ -85,7 +85,7 @@ def _run_dirs(root: str | Path) -> list[tuple[str, Path]]:
 
 def save_run(run: dict, tag: str, root: str | Path = "runs") -> Path:
     if not TAG_RE.fullmatch(tag):
-        raise ValueError(f"недопустимый tag {tag!r}: только латиница, цифры и символы . _ -")
+        raise ValueError(f"invalid tag {tag!r}: only Latin letters, digits and . _ - are allowed")
     now = datetime.now().astimezone()
     meta = {"tag": tag, "git_hash": git_hash(), "timestamp": now.isoformat(timespec="seconds")}
     data, arrays = _split_arrays(run)

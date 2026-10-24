@@ -80,7 +80,7 @@ def test_normalize_operator_preserves_energies(trap: Problem) -> None:
 
 
 def test_normalize_operator_rejects_zero_operator() -> None:
-    with pytest.raises(ValueError, match="нулевой"):
+    with pytest.raises(ValueError, match="zero"):
         normalize_operator(SparsePauliOp("III", coeffs=[0.0]))
 
 
@@ -117,7 +117,7 @@ def test_build_qaoa_circuit_matches_exact_evolution(p: int) -> None:
 
 @pytest.mark.parametrize("p", [0, -1])
 def test_build_qaoa_circuit_rejects_bad_depth(trap_op: SparsePauliOp, p: int) -> None:
-    with pytest.raises(ValueError, match="p должно быть"):
+    with pytest.raises(ValueError, match="p must be"):
         build_qaoa_circuit(trap_op, p)
 
 
@@ -163,7 +163,7 @@ def test_assemble_values_binds_angles_to_their_gates() -> None:
 )
 def test_assemble_values_rejects_wrong_lengths(gammas: list, betas: list) -> None:
     circuit = build_qaoa_circuit(SMALL_OP, 2)
-    with pytest.raises(ValueError, match="форму"):
+    with pytest.raises(ValueError, match="shape"):
         assemble_values(circuit, gammas, betas)
 
 
