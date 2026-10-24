@@ -5,7 +5,15 @@ import numpy as np
 import pytest
 import pyvista as pv
 
-from lodq.meshes import SOURCES, base_meshes, make_lods, normalize_mesh, prepare_mesh
+from lodq.meshes import (
+    SOURCES,
+    base_meshes,
+    bounding_sphere,
+    make_lods,
+    normalize_mesh,
+    prepare_mesh,
+    simplification_error,
+)
 from lodq.scene import load_scene
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,6 +130,47 @@ def test_make_lods_invalid_ratios(ratios: tuple[float, ...]) -> None:
         make_lods(prepare_mesh(shifted_sphere(), 2000), ratios=ratios)
 
 
+def test_bounding_sphere() -> None:
+    center, radius = bounding_sphere(shifted_sphere())
+    np.testing.assert_allclose(center, (5.0, -2.0, 1.0), atol=1e-6)
+    assert radius == pytest.approx(3.0, rel=1e-3)
+
+
+def test_bounding_sphere_empty() -> None:
+    with pytest.raises(ValueError, match="пустой"):
+        bounding_sphere(pv.PolyData())
+
+
+def test_error_identity() -> None:
+    mesh = prepare_mesh(shifted_sphere(), 2000)
+    assert simplification_error(mesh, mesh) == 0.0
+    assert simplification_error(mesh, make_lods(mesh)[0]) == 0.0
+
+
+def test_error_normalized_by_diameter() -> None:
+    cube = normalize_mesh(pv.Cube().triangulate().clean())
+    assert cube.n_points == 8
+    assert simplification_error(cube, cube.translate((0.1, 0.0, 0.0))) == pytest.approx(0.05)
+
+
+def test_error_is_symmetric() -> None:
+    lod0 = pv.PolyData(np.array([[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]))
+    lodj = pv.PolyData(np.array([[-1.0, 0.0, 0.0]]))
+    assert simplification_error(lod0, lodj) == pytest.approx(1.0)
+
+
+def test_error_grows_with_lod() -> None:
+    lods = make_lods(prepare_mesh(shifted_sphere(), 2000))
+    errors = [simplification_error(lods[0], lod) for lod in lods]
+    assert errors[0] == 0.0
+    assert errors[0] < errors[1] < errors[2]
+
+
+def test_error_empty_lod() -> None:
+    with pytest.raises(ValueError, match="пустой"):
+        simplification_error(prepare_mesh(shifted_sphere(), 2000), pv.PolyData())
+
+
 @pytest.fixture(scope="module")
 def meshes() -> dict[str, pv.PolyData]:
     try:
@@ -159,3 +208,11 @@ def test_base_mesh_lods(meshes: dict[str, pv.PolyData], name: str) -> None:
     assert counts[2] == pytest.approx(0.1 * n_tris, rel=0.02)
     assert all(lod.is_all_triangles for lod in lods)
     assert_same_frame(lods, tol=0.01)
+
+
+@pytest.mark.parametrize("name", list(SOURCES))
+def test_base_mesh_errors(meshes: dict[str, pv.PolyData], name: str) -> None:
+    lods = make_lods(meshes[name])
+    errors = [simplification_error(lods[0], lod) for lod in lods]
+    assert errors[0] == 0.0
+    assert errors[0] < errors[1] < errors[2] < 0.1
