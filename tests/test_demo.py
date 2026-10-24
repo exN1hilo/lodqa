@@ -9,15 +9,21 @@ import numpy as np
 import pytest
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.colors import to_hex
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Polygon, Rectangle
 from matplotlib.text import Text
 from streamlit.testing.v1 import AppTest
 
 from lodq.classical import dp_solve, greedy_solve
 from lodq.demo import (
     LOD_RAMP,
+    METHOD_COLORS,
     METHODS,
+    SURFACE,
+    budget_chart,
     budget_range,
+    budget_rows,
+    choice_matrices,
+    choice_matrix,
     classical_record,
     frame_penalties,
     frame_scene,
@@ -30,6 +36,7 @@ from lodq.demo import (
     precompute_path,
     qaoa_top_choice,
     scene_frames,
+    top10_table,
     top_view,
 )
 from lodq.fastsim import probabilities, qaoa_state
@@ -530,3 +537,138 @@ def test_app_method_switch(
 
     assert not at.exception
     assert any("QAOA was not run" in caption.value for caption in at.caption)
+
+
+def test_choice_matrix_is_one_hot() -> None:
+    np.testing.assert_array_equal(choice_matrix((2, 0), 2, 3), [[0, 0, 1], [1, 0, 0]])
+    np.testing.assert_array_equal(choice_matrix(None, 2, 3), np.zeros((2, 3)))
+
+
+def test_budget_rows_match_solutions(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    record = frames[0]
+
+    rows = {row["method"]: row for row in budget_rows(record)}
+
+    assert list(rows) == list(METHODS)
+    assert rows["DP"]["used"] == record["dp"]["used"]
+    assert rows["DP"]["ar"] == pytest.approx(1.0)
+    assert rows["Greedy"]["value"] == pytest.approx(record["greedy"]["value"])
+    assert rows["Greedy"]["ar"] == pytest.approx(record["ar_greedy"])
+    assert rows["QAOA"]["choice"] == qaoa_top_choice(record)
+    assert all(row["dW"] == record["problem"]["dW"] for row in rows.values())
+
+
+def test_budget_rows_without_qaoa(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+
+    rows = {row["method"]: row for row in budget_rows(classical_record(frames[0], 22000))}
+
+    assert rows["QAOA"] | {"method": None} == {
+        "method": None,
+        "choice": None,
+        "value": None,
+        "used": None,
+        "dW": 4,
+        "ar": None,
+    }
+    assert rows["DP"]["used"] <= 4
+
+
+def filled_cells(ax) -> dict[tuple[int, int], str]:
+    cells = {}
+    for patch in ax.patches:
+        if isinstance(patch, Polygon) and to_hex(patch.get_facecolor()) != SURFACE:
+            x, y = patch.get_xy()[0]
+            cells[round(float(y)), round(float(x))] = to_hex(patch.get_facecolor())
+    return cells
+
+
+def test_choice_matrices_draw_selected_lods(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    record = classical_record(frames[0], 22000)
+
+    fig = choice_matrices(record)
+
+    titles = [ax.get_title() for ax in fig.axes]
+    assert [title.split("\n")[0] for title in titles] == list(METHODS)
+    assert titles[1] == "QAOA\nno choice"
+    assert titles[2] == "DP\nAR 1.000"
+    greedy, qaoa, dp = (filled_cells(ax) for ax in fig.axes)
+    assert greedy == {(i, j): lod_colors(3)[j] for i, j in enumerate(record["greedy"]["choice"])}
+    assert dp == {(i, j): lod_colors(3)[j] for i, j in enumerate(record["dp"]["choice"])}
+    assert qaoa == {}
+    assert [t.get_text() for t in fig.axes[0].get_yticklabels()] == ["a", "b"]
+
+
+def test_budget_chart_bars_and_limit(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    record = frames[0]
+    rows = budget_rows(record)
+
+    fig = budget_chart(record)
+
+    ax = fig.axes[0]
+    bars = [patch for patch in ax.patches if isinstance(patch, Rectangle)]
+    assert [bar.get_width() for bar in bars] == [row["used"] or 0 for row in rows]
+    assert [to_hex(bar.get_facecolor()) for bar in bars] == [
+        METHOD_COLORS[method] for method in METHODS
+    ]
+    assert ax.lines[0].get_xdata()[0] == record["problem"]["dW"]
+    texts = {t.get_text() for t in ax.texts}
+    assert f"dW = {record['problem']['dW']}" in texts
+    assert f"{record['dp']['used']} / {record['problem']['dW']}" in texts
+
+
+def test_top10_table(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    record = frames[0]
+
+    table = top10_table(record)
+
+    assert list(table.columns) == [
+        "bitstring",
+        "LOD choice",
+        "probability",
+        "AR",
+        "used",
+        "feasible",
+        "optimal",
+    ]
+    assert len(table) == len(record["top10"])
+    assert table["probability"].is_monotonic_decreasing
+    assert str(table["used"].dtype) == "Int64"
+    for row, source in zip(table.to_dict("records"), record["top10"], strict=True):
+        if source["feasible"]:
+            assert row["AR"] == pytest.approx(source["value"] / record["dp"]["value"])
+        else:
+            assert np.isnan(row["AR"])
+
+
+def test_top10_table_empty_without_qaoa(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+
+    table = top10_table(classical_record(frames[0], 22000))
+
+    assert table.empty
+    assert "bitstring" in table.columns
+
+
+def test_app_right_column_and_top10(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, frames = mini
+    at = app(out, monkeypatch)
+
+    assert [header.value for header in at.subheader] == [
+        "LOD choice per method",
+        "Budget used",
+        "Top-10 bitstrings",
+    ]
+    assert len(at.dataframe) == 1
+    assert list(at.dataframe[0].value["bitstring"]) == [r["bitstring"] for r in frames[0]["top10"]]
+
+    at.sidebar.slider[1].set_value(22000).run()
+
+    assert len(at.dataframe) == 0
+    assert any("no samples yet" in caption.value for caption in at.caption)

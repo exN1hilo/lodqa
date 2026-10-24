@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
@@ -22,6 +23,7 @@ from lodq.evaluate import (
 )
 from lodq.fastsim import probabilities, qaoa_state
 from lodq.metrics import Problem, problem_from_scene
+from lodq.plots import COLORS
 from lodq.qaoa import QAOAResult, run_qaoa, run_qaoa_sweep
 from lodq.qubo import (
     bits_from_bitstring,
@@ -46,6 +48,7 @@ SURFACE = "#fcfcfb"
 INK = "#0b0b0b"
 INK_SECONDARY = "#52514e"
 GRID = "#e0e0e0"
+METHOD_COLORS = {"Greedy": COLORS["greedy"], "QAOA": COLORS["qaoa_x"], "DP": COLORS["dp"]}
 
 
 def load_path(path_json: str | Path) -> tuple[str, list[Position]]:
@@ -449,3 +452,141 @@ def top_view(scene: Scene, choice: tuple[int, ...] | None, method: str) -> Figur
     fig.tight_layout()
     _separate_labels(fig, labels)
     return fig
+
+
+def choice_matrix(choice: tuple[int, ...] | None, n_objects: int, n_lods: int) -> np.ndarray:
+    matrix = np.zeros((n_objects, n_lods), dtype=np.int8)
+    if choice is not None:
+        matrix[np.arange(n_objects), np.asarray(choice, dtype=np.intp)] = 1
+    return matrix
+
+
+def budget_rows(record: dict[str, Any]) -> list[dict[str, Any]]:
+    problem = record["problem"]
+    v, dw = np.asarray(problem["v"]), np.asarray(problem["dw"])
+    rows = []
+    for method in METHODS:
+        choice = method_choice(record, method)
+        if choice is None:
+            value, used = None, None
+        else:
+            levels = np.arange(len(choice)), np.asarray(choice, dtype=np.intp)
+            value, used = float(v[levels].sum()), int(dw[levels].sum())
+        rows.append(
+            {
+                "method": method,
+                "choice": choice,
+                "value": value,
+                "used": used,
+                "dW": int(problem["dW"]),
+                "ar": None if value is None else value / float(record["dp"]["value"]),
+            }
+        )
+    return rows
+
+
+def choice_matrices(record: dict[str, Any]) -> Figure:
+    names = record["problem"]["names"]
+    n_objects, n_lods = np.shape(record["problem"]["v"])
+    colors = lod_colors(n_lods)
+    rows = budget_rows(record)
+    fig = Figure(figsize=(7.2, 3.2), facecolor=SURFACE)
+    axes = fig.subplots(1, len(rows), sharey=True)
+    for ax, row in zip(axes, rows, strict=True):
+        matrix = choice_matrix(row["choice"], n_objects, n_lods)
+        ax.set_facecolor(SURFACE)
+        for i, j in np.ndindex(n_objects, n_lods):
+            face = colors[j] if matrix[i, j] else SURFACE
+            ax.add_patch(
+                Polygon(
+                    [(j, i), (j + 1, i), (j + 1, i + 1), (j, i + 1)],
+                    closed=True,
+                    facecolor=face,
+                    edgecolor=GRID,
+                    linewidth=1,
+                )
+            )
+        ax.set_xlim(0, n_lods)
+        ax.set_ylim(n_objects, 0)
+        ax.set_aspect("equal")
+        ax.set_xticks(np.arange(n_lods) + 0.5, [f"LOD{j}" for j in range(n_lods)], fontsize=8)
+        ax.set_yticks(np.arange(n_objects) + 0.5, names, fontsize=8)
+        ax.tick_params(length=0, colors=INK_SECONDARY)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        subtitle = "no choice" if row["ar"] is None else f"AR {row['ar']:.3f}"
+        ax.set_title(f"{row['method']}\n{subtitle}", color=INK, fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+def budget_chart(record: dict[str, Any]) -> Figure:
+    rows = budget_rows(record)
+    dW = rows[0]["dW"]
+    fig = Figure(figsize=(7.2, 2.2), facecolor=SURFACE)
+    ax = fig.add_subplot()
+    ax.set_facecolor(SURFACE)
+    positions = np.arange(len(rows))
+    used = [0 if row["used"] is None else row["used"] for row in rows]
+    ax.barh(
+        positions,
+        used,
+        height=0.55,
+        color=[METHOD_COLORS[row["method"]] for row in rows],
+        edgecolor=SURFACE,
+        linewidth=2,
+    )
+    ax.axvline(dW, color=INK, linewidth=1.5, linestyle="--")
+    ax.annotate(
+        f"dW = {dW}",
+        xy=(dW, 1.0),
+        xycoords=("data", "axes fraction"),
+        xytext=(4, 0),
+        textcoords="offset points",
+        va="top",
+        color=INK,
+        fontsize=9,
+    )
+    for position, row in zip(positions, rows, strict=True):
+        text = "no choice" if row["used"] is None else f"{row['used']} / {dW}"
+        ax.annotate(
+            text,
+            xy=(0 if row["used"] is None else row["used"], position),
+            xytext=(6, 0),
+            textcoords="offset points",
+            va="center",
+            color=INK_SECONDARY,
+            fontsize=9,
+        )
+    ax.set_yticks(positions, [row["method"] for row in rows], fontsize=9)
+    ax.tick_params(axis="y", length=0)
+    ax.invert_yaxis()
+    ax.set_xlim(0, max(dW, max(used)) * 1.35 + 1)
+    ax.set_xlabel("budget used, blocks", color=INK_SECONDARY, fontsize=9)
+    ax.tick_params(colors=INK_SECONDARY, labelsize=8)
+    ax.grid(axis="x", color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color(GRID)
+    fig.tight_layout()
+    return fig
+
+
+def top10_table(record: dict[str, Any]) -> pd.DataFrame:
+    columns = ["bitstring", "LOD choice", "probability", "AR", "used", "feasible", "optimal"]
+    rows = [
+        {
+            "bitstring": row["bitstring"],
+            "LOD choice": row["lod_code"],
+            "probability": float(row["prob"]),
+            "AR": float(row["value"]) / float(record["dp"]["value"]) if row["feasible"] else None,
+            "used": int(row["used"]) if row["lod_code"] != "invalid" else None,
+            "feasible": bool(row["feasible"]),
+            "optimal": bool(row["is_optimal"]),
+        }
+        for row in record["top10"]
+    ]
+    table = pd.DataFrame(rows, columns=columns)
+    table["used"] = table["used"].astype("Int64")
+    return table

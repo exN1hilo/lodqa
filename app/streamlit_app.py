@@ -5,7 +5,9 @@ import streamlit as st
 from lodq.demo import (
     LIVE_P,
     METHODS,
+    budget_chart,
     budget_range,
+    choice_matrices,
     classical_record,
     frame_scene,
     headline,
@@ -13,6 +15,7 @@ from lodq.demo import (
     load_frames,
     method_choice,
     scene_frames,
+    top10_table,
     top_view,
 )
 
@@ -73,10 +76,26 @@ with left:
     method = st.radio("Method", METHODS, horizontal=True, key="method")
     choice = method_choice(record, method)
     if choice is None:
-        reason = (
-            "QAOA was not run for this budget"
-            if record["qaoa"] is None
-            else ("no feasible QAOA sample")
-        )
+        not_run = record["qaoa"] is None
+        reason = "QAOA was not run for this budget" if not_run else "no feasible QAOA sample"
         st.caption(f"{method}: {reason}, objects are shown in gray.")
     st.pyplot(top_view(frame_scene(record, budget), choice, method))
+with right:
+    st.subheader("LOD choice per method")
+    st.pyplot(choice_matrices(record))
+    st.subheader("Budget used")
+    st.pyplot(budget_chart(record))
+
+st.subheader("Top-10 bitstrings")
+if record["top10"]:
+    st.dataframe(
+        top10_table(record),
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "probability": st.column_config.NumberColumn(format="%.4f"),
+            "AR": st.column_config.NumberColumn(format="%.3f"),
+        },
+    )
+else:
+    st.caption("QAOA was not run for this budget, so there are no samples yet.")
