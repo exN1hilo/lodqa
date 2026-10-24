@@ -4,6 +4,14 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
+from matplotlib.patches import Circle, Polygon
+from matplotlib.text import Annotation, Text
+from matplotlib.transforms import Bbox
+
 from lodq.classical import Solution, dp_solve, greedy_solve
 from lodq.evaluate import (
     evaluate_counts,
@@ -15,7 +23,15 @@ from lodq.evaluate import (
 from lodq.fastsim import probabilities, qaoa_state
 from lodq.metrics import Problem, problem_from_scene
 from lodq.qaoa import QAOAResult, run_qaoa, run_qaoa_sweep
-from lodq.qubo import build_qubo, calibrate_penalties, default_penalties, verify_qubo
+from lodq.qubo import (
+    bits_from_bitstring,
+    build_qubo,
+    calibrate_penalties,
+    decode,
+    default_penalties,
+    is_feasible,
+    verify_qubo,
+)
 from lodq.scene import Scene, load_scene, with_camera
 from lodq.storage import NumpyEncoder
 
@@ -24,6 +40,12 @@ BUDGET_SPREAD = 0.3
 BUDGET_STEP = 1000
 LIVE_P = 1
 LIVE_MAXITER = 25
+METHODS = ("Greedy", "QAOA", "DP")
+LOD_RAMP = ("#104281", "#1c5cab", "#2a78d6", "#5598e7", "#86b6ef")
+SURFACE = "#fcfcfb"
+INK = "#0b0b0b"
+INK_SECONDARY = "#52514e"
+GRID = "#e0e0e0"
 
 
 def load_path(path_json: str | Path) -> tuple[str, list[Position]]:
@@ -290,3 +312,140 @@ def headline(record: dict[str, Any]) -> list[dict[str, str | None]]:
         }
     )
     return cards
+
+
+def lod_colors(n_lods: int) -> list[str]:
+    if n_lods == 1:
+        return [LOD_RAMP[0]]
+    steps = np.linspace(0, len(LOD_RAMP) - 1, n_lods).round().astype(int)
+    return [LOD_RAMP[step] for step in steps]
+
+
+def qaoa_top_choice(record: dict[str, Any]) -> tuple[int, ...] | None:
+    if record.get("qaoa") is None:
+        return None
+    problem = record["problem"]
+    v, dw = np.asarray(problem["v"]), np.asarray(problem["dw"])
+    penalties = record["penalties"]
+    qubo = build_qubo(v, dw, int(problem["dW"]), penalties["A"], penalties["B"])
+    rows = np.arange(qubo.N)
+    best_key, best_choice = None, None
+    for bitstring, count in record["qaoa"]["counts"].items():
+        bits = bits_from_bitstring(bitstring, qubo.n)
+        if not is_feasible(bits, qubo, dw):
+            continue
+        choice = decode(bits, qubo)
+        levels = np.asarray(choice)
+        key = (-int(count), -float(v[rows, levels].sum()), int(dw[rows, levels].sum()), choice)
+        if best_key is None or key < best_key:
+            best_key, best_choice = key, choice
+    return best_choice
+
+
+def method_choice(record: dict[str, Any], method: str) -> tuple[int, ...] | None:
+    if method == "DP":
+        return tuple(record["dp"]["choice"])
+    if method == "Greedy":
+        return tuple(record["greedy"]["choice"])
+    if method == "QAOA":
+        return qaoa_top_choice(record)
+    raise ValueError(f"unknown method {method!r}: expected one of {METHODS}")
+
+
+def _view_cone(scene: Scene, reach: float) -> np.ndarray:
+    camera = np.asarray(scene.camera.position, dtype=np.float64)[[0, 2]]
+    target = np.asarray(scene.camera.target, dtype=np.float64)[[0, 2]]
+    heading = np.arctan2(*(target - camera)[::-1])
+    half = np.deg2rad(scene.camera.fov_deg) / 2
+    edges = [
+        camera + reach * np.array([np.cos(a), np.sin(a)]) for a in (heading - half, heading + half)
+    ]
+    return np.array([camera, *edges])
+
+
+def _separate_labels(fig: Figure, labels: list[Annotation], gap: float = 4.0) -> None:
+    renderer = FigureCanvasAgg(fig).get_renderer()
+    placed: list[Bbox] = []
+    for label in sorted(labels, key=lambda text: text.xy[1]):
+        box = Text.get_window_extent(label, renderer)
+        for _ in range(len(labels)):
+            if not any(box.overlaps(other) for other in placed):
+                break
+            x, y = label.xyann
+            label.xyann = (x, y + box.height + gap)
+            box = Text.get_window_extent(label, renderer)
+        placed.append(box)
+
+
+def top_view(scene: Scene, choice: tuple[int, ...] | None, method: str) -> Figure:
+    colors = lod_colors(scene.n_lods)
+    camera = np.asarray(scene.camera.position, dtype=np.float64)[[0, 2]]
+    centers = np.array([[obj.position[0], obj.position[2]] for obj in scene.objects])
+    radii = np.array([obj.radius for obj in scene.objects])
+    reach = 1.15 * float(np.max(np.linalg.norm(centers - camera, axis=1) + radii))
+
+    fig = Figure(figsize=(6.4, 5.6), facecolor=SURFACE)
+    ax = fig.add_subplot()
+    ax.set_facecolor(SURFACE)
+    ax.add_patch(Polygon(_view_cone(scene, reach), closed=True, color=GRID, alpha=0.6, lw=0))
+    labels = []
+    for index in np.argsort(-radii, kind="stable"):
+        obj, center, radius = scene.objects[index], centers[index], radii[index]
+        level = None if choice is None else choice[index]
+        face = "#d4d3cf" if level is None else colors[level]
+        ax.add_patch(Circle(center, radius, facecolor=face, edgecolor=SURFACE, linewidth=2))
+        text = obj.name if level is None else f"{obj.name} · LOD{level}"
+        labels.append(
+            ax.annotate(
+                text,
+                xy=(center[0], center[1] + radius),
+                xytext=(0, 4),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                color=INK,
+                fontsize=9,
+                arrowprops={"arrowstyle": "-", "color": INK_SECONDARY, "lw": 0.6, "shrinkA": 1},
+            )
+        )
+    ax.plot(*camera, marker="^", markersize=10, color=INK, linestyle="none")
+    ax.annotate(
+        "camera",
+        xy=camera,
+        xytext=(0, -14),
+        textcoords="offset points",
+        ha="center",
+        color=INK_SECONDARY,
+        fontsize=9,
+    )
+
+    points = np.vstack([centers - radii[:, None], centers + radii[:, None], camera[None, :]])
+    pad = 0.08 * float(np.ptp(points, axis=0).max())
+    ax.set_xlim(points[:, 0].min() - pad, points[:, 0].max() + pad)
+    ax.set_ylim(points[:, 1].min() - pad, points[:, 1].max() + 2.5 * pad)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x", color=INK_SECONDARY)
+    ax.set_ylabel("z", color=INK_SECONDARY)
+    ax.tick_params(colors=INK_SECONDARY, labelsize=8)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(GRID)
+    title = f"Top view · {method}" if choice is not None else f"Top view · {method}: no choice"
+    ax.set_title(title, loc="left", color=INK, fontsize=11)
+    handles = [
+        Line2D([], [], marker="o", linestyle="none", markersize=9, color=color, label=f"LOD{j}")
+        for j, color in enumerate(colors)
+    ]
+    ax.legend(
+        handles=handles,
+        loc="lower right",
+        bbox_to_anchor=(1.0, 1.0),
+        frameon=False,
+        fontsize=9,
+        ncols=len(colors),
+        borderaxespad=0.2,
+    )
+    fig.tight_layout()
+    _separate_labels(fig, labels)
+    return fig

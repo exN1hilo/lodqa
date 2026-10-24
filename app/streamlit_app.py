@@ -4,12 +4,16 @@ import streamlit as st
 
 from lodq.demo import (
     LIVE_P,
+    METHODS,
     budget_range,
     classical_record,
+    frame_scene,
     headline,
     live_record,
     load_frames,
+    method_choice,
     scene_frames,
+    top_view,
 )
 
 FRAMES_DIR = os.environ.get("LODQ_FRAMES_DIR", "cache/path")
@@ -63,3 +67,16 @@ st.session_state["record"] = record
 
 for column, card in zip(st.columns(4), headline(record), strict=True):
     column.metric(card["label"], card["value"], card["delta"], help=card["help"])
+
+left, right = st.columns(2)
+with left:
+    method = st.radio("Method", METHODS, horizontal=True, key="method")
+    choice = method_choice(record, method)
+    if choice is None:
+        reason = (
+            "QAOA was not run for this budget"
+            if record["qaoa"] is None
+            else ("no feasible QAOA sample")
+        )
+        st.caption(f"{method}: {reason}, objects are shown in gray.")
+    st.pyplot(top_view(frame_scene(record, budget), choice, method))

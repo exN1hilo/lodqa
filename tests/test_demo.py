@@ -7,10 +7,16 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.colors import to_hex
+from matplotlib.patches import Circle
+from matplotlib.text import Text
 from streamlit.testing.v1 import AppTest
 
 from lodq.classical import dp_solve, greedy_solve
 from lodq.demo import (
+    LOD_RAMP,
+    METHODS,
     budget_range,
     classical_record,
     frame_penalties,
@@ -19,8 +25,12 @@ from lodq.demo import (
     live_record,
     load_frames,
     load_path,
+    lod_colors,
+    method_choice,
     precompute_path,
+    qaoa_top_choice,
     scene_frames,
+    top_view,
 )
 from lodq.fastsim import probabilities, qaoa_state
 from lodq.metrics import problem_from_scene
@@ -407,3 +417,116 @@ def test_app_metric_row(
     at.sidebar.slider[1].set_value(22000).run()
 
     assert [metric.value for metric in at.metric][2:] == ["—", "—"]
+
+
+def test_lod_colors_follow_ordinal_ramp() -> None:
+    assert lod_colors(3) == [LOD_RAMP[0], LOD_RAMP[2], LOD_RAMP[4]]
+    assert lod_colors(1) == [LOD_RAMP[0]]
+    assert lod_colors(5) == list(LOD_RAMP)
+
+
+def test_method_choice_dp_and_greedy(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    record = frames[0]
+
+    assert method_choice(record, "DP") == tuple(record["dp"]["choice"])
+    assert method_choice(record, "Greedy") == tuple(record["greedy"]["choice"])
+    with pytest.raises(ValueError, match="method"):
+        method_choice(record, "Random")
+
+
+def test_qaoa_top_choice_matches_ar_top1(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+
+    for record in frames:
+        choice = qaoa_top_choice(record)
+        v = np.asarray(record["problem"]["v"])
+        if choice is None:
+            assert record["metrics"]["ar_top1"] == 0.0
+            continue
+        value = v[np.arange(len(choice)), list(choice)].sum()
+        assert value / record["dp"]["value"] == pytest.approx(record["metrics"]["ar_top1"])
+        assert method_choice(record, "QAOA") == choice
+
+
+def test_qaoa_top_choice_none_without_feasible_samples(
+    mini: tuple[Path, Path, list[dict]],
+) -> None:
+    _, _, frames = mini
+    n = len(next(iter(frames[0]["qaoa"]["counts"])))
+    record = frames[0] | {"qaoa": frames[0]["qaoa"] | {"counts": {"1" * n: 900}}}
+
+    assert qaoa_top_choice(record) is None
+    assert qaoa_top_choice(classical_record(frames[0], 22000)) is None
+
+
+def circle_colors(fig, scene) -> dict[str, str]:
+    ax = fig.axes[0]
+    circles = [patch for patch in ax.patches if isinstance(patch, Circle)]
+    by_center = {tuple(np.round(c.center, 6)): to_hex(c.get_facecolor()) for c in circles}
+    return {
+        obj.name: by_center[(round(obj.position[0], 6), round(obj.position[2], 6))]
+        for obj in scene.objects
+    }
+
+
+def test_top_view_colors_objects_by_lod(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    scene = frame_scene(frames[0])
+
+    fig = top_view(scene, (0, 2), "DP")
+
+    assert circle_colors(fig, scene) == {"a": LOD_RAMP[0], "b": LOD_RAMP[4]}
+    ax = fig.axes[0]
+    assert ax.get_title(loc="left") == "Top view · DP"
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["LOD0", "LOD1", "LOD2"]
+    texts = {t.get_text() for t in ax.texts}
+    assert {"a · LOD0", "b · LOD2", "camera"} <= texts
+
+
+def test_top_view_without_choice_is_gray(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    scene = frame_scene(frames[0])
+
+    fig = top_view(scene, None, "QAOA")
+
+    assert set(circle_colors(fig, scene).values()) == {"#d4d3cf"}
+    assert fig.axes[0].get_title(loc="left") == "Top view · QAOA: no choice"
+
+
+def test_top_view_separates_labels_of_stacked_objects() -> None:
+    objects = tuple(
+        SceneObject(name, (1.0, height, 4.0), radius, (9000, 4000, 1000))
+        for name, height, radius in [("low", 0.0, 1.0), ("high", 5.0, 1.2), ("mid", 2.0, 0.9)]
+    )
+    scene = Scene("stack", objects, Camera((0.0, 2.0, -6.0)), budget_W=20000)
+
+    fig = top_view(scene, (0, 1, 2), "DP")
+
+    renderer = FigureCanvasAgg(fig).get_renderer()
+    boxes = [
+        Text.get_window_extent(t, renderer) for t in fig.axes[0].texts if "LOD" in t.get_text()
+    ]
+    assert len(boxes) == 3
+    assert not any(a.overlaps(b) for i, a in enumerate(boxes) for b in boxes[i + 1 :])
+
+
+def test_app_method_switch(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, _ = mini
+    at = app(out, monkeypatch)
+
+    assert at.radio[0].options == list(METHODS)
+    assert at.radio[0].value == "Greedy"
+
+    at.radio[0].set_value("DP").run()
+
+    assert not at.exception
+    assert at.radio[0].value == "DP"
+
+    at.sidebar.slider[1].set_value(22000).run()
+    at.radio[0].set_value("QAOA").run()
+
+    assert not at.exception
+    assert any("QAOA was not run" in caption.value for caption in at.caption)
