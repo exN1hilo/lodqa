@@ -2,10 +2,12 @@ import numpy as np
 import pytest
 from qiskit import QuantumCircuit
 from qiskit.circuit import Parameter
-from qiskit.quantum_info import Operator, Statevector
+from qiskit.quantum_info import Operator, SparsePauliOp, Statevector
 from scipy.linalg import expm
 
 from lodq import qaoa as qaoa_module
+from lodq.ising import qubo_to_ising
+from lodq.qubo import Qubo, bits_from_bitstring, build_qubo, decode
 
 
 def test_w_state_has_uniform_one_hot_probabilities() -> None:
@@ -116,3 +118,109 @@ def test_xy_layer_single_lod_has_no_self_coupling() -> None:
 def test_xy_layer_rejects_invalid_register_sizes(counts: tuple[int, int, int]) -> None:
     with pytest.raises(ValueError):
         qaoa_module.xy_mixer_layer(QuantumCircuit(3), 0.37, *counts)
+
+
+@pytest.mark.parametrize("p", [1, 2, 3, 4])
+def test_xy_qaoa_parameters_and_one_hot_support(p: int) -> None:
+    cost_op = SparsePauliOp.from_list([("IIIIIZ", 0.7), ("IIIZII", -0.2), ("IZZIII", 0.4)])
+    circuit = qaoa_module.build_qaoa_circuit_xy(cost_op, p, 2, 3, 0)
+    assert circuit.num_qubits == 6
+    assert circuit.num_parameters == 2 * p
+    gamma_params, beta_params = qaoa_module.split_params(circuit)
+    assert [param.name for param in gamma_params] == [f"γ[{k}]" for k in range(p)]
+    assert [param.name for param in beta_params] == [f"β[{k}]" for k in range(p)]
+    values = qaoa_module.assemble_values(
+        circuit, np.linspace(0.1, 0.4, p), np.linspace(-0.2, -0.5, p)
+    )
+    state = Statevector.from_instruction(circuit.assign_parameters(values).decompose())
+    allowed = np.zeros(64, dtype=bool)
+    allowed[[9, 10, 12, 17, 18, 20, 33, 34, 36]] = True
+    assert state.probabilities()[~allowed].sum() < 1e-12
+
+
+def test_xy_qaoa_matches_phase_then_mixer_by_hand() -> None:
+    cost_op = SparsePauliOp.from_list([("IIZ", 0.7), ("IZI", -0.2), ("ZII", 0.4)])
+    circuit = qaoa_module.build_qaoa_circuit_xy(cost_op, 1, 1, 3, 0)
+    gamma, beta = 0.41, -0.37
+    values = qaoa_module.assemble_values(circuit, np.array([gamma]), np.array([beta]))
+    state = Statevector.from_instruction(circuit.assign_parameters(values).decompose())
+    phase = np.exp(-1j * gamma * np.array([-0.5, 1.3, 0.1])) / np.sqrt(3)
+    c, s = np.cos(beta), -1j * np.sin(beta)
+    r01 = np.array([[c, s, 0], [s, c, 0], [0, 0, 1]])
+    r12 = np.array([[1, 0, 0], [0, c, s], [0, s, c]])
+    r20 = np.array([[c, 0, s], [0, 1, 0], [s, 0, c]])
+    expected = np.zeros(8, dtype=complex)
+    expected[[1, 2, 4]] = r20 @ r12 @ r01 @ phase
+    np.testing.assert_allclose(state.data, expected, atol=1e-12, rtol=0)
+
+
+@pytest.mark.parametrize("p", [0, -1])
+def test_xy_qaoa_rejects_nonpositive_depth(p: int) -> None:
+    cost_op = SparsePauliOp.from_list([("IIZ", 1.0)])
+    with pytest.raises(ValueError, match="p"):
+        qaoa_module.build_qaoa_circuit_xy(cost_op, p, 1, 3, 0)
+
+
+def test_xy_qaoa_rejects_operator_size_mismatch() -> None:
+    cost_op = SparsePauliOp.from_list([("IIZ", 1.0)])
+    with pytest.raises(ValueError):
+        qaoa_module.build_qaoa_circuit_xy(cost_op, 1, 2, 3, 0)
+
+
+@pytest.fixture
+def xy_qubo() -> Qubo:
+    v = np.array([[1.0, 0.65, 0.25], [0.6, 0.39, 0.15]])
+    dw = np.array([[2, 1, 0], [2, 1, 0]])
+    return build_qubo(v, dw, 1, A=0.0, B=1.0)
+
+
+@pytest.mark.parametrize("backend", ["aer", "statevector"])
+@pytest.mark.parametrize("objective", ["energy", "cvar"])
+def test_run_xy_qaoa_preserves_one_hot_and_reports_energy(
+    xy_qubo: Qubo, backend: str, objective: str
+) -> None:
+    result = qaoa_module.run_qaoa(
+        xy_qubo,
+        p=1,
+        seed=17,
+        n_starts=1,
+        maxiter=12,
+        shots=128,
+        objective=objective,
+        cvar_alpha=0.25,
+        backend=backend,
+        mixer="xy",
+    )
+    assert result.mixer == "xy"
+    assert result.backend == backend
+    assert result.objective == objective
+    assert sum(result.counts.values()) == 128
+    assert all(
+        decode(bits_from_bitstring(bitstring, xy_qubo.n), xy_qubo) is not None
+        for bitstring in result.counts
+    )
+    raw_op, const = qubo_to_ising(xy_qubo)
+    cost_op, _ = qaoa_module.normalize_operator(raw_op)
+    circuit = qaoa_module.build_qaoa_circuit_xy(cost_op, 1, xy_qubo.N, xy_qubo.M, xy_qubo.K)
+    values = qaoa_module.assemble_values(circuit, result.gammas, result.betas)
+    state = Statevector.from_instruction(circuit.assign_parameters(values).decompose())
+    expected = float(state.expectation_value(raw_op).real) + const
+    assert result.best_expectation == pytest.approx(expected, abs=1e-9, rel=0)
+
+
+def test_run_xy_qaoa_rejects_fast_simulator(xy_qubo: Qubo) -> None:
+    with pytest.raises(ValueError, match="fastsim"):
+        qaoa_module.run_qaoa(xy_qubo, p=1, seed=0, mixer="xy", backend="fastsim")
+
+
+def test_run_xy_qaoa_requires_zero_one_hot_penalty() -> None:
+    v = np.array([[1.0, 0.65, 0.25]])
+    dw = np.array([[2, 1, 0]])
+    qubo = build_qubo(v, dw, 1, A=1.5, B=1.0)
+    with pytest.raises(ValueError, match="A=0"):
+        qaoa_module.run_qaoa(qubo, p=1, seed=0, mixer="xy")
+
+
+def test_run_qaoa_rejects_unknown_mixer(xy_qubo: Qubo) -> None:
+    with pytest.raises(ValueError, match="mixer"):
+        qaoa_module.run_qaoa(xy_qubo, p=1, seed=0, mixer="unknown")
