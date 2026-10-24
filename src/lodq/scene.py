@@ -235,3 +235,25 @@ def random_scene(
     raise RuntimeError(
         f"сцена random_{seed:03d}: не удалось получить dW в диапазоне {dW_range} за 100 попыток"
     )
+
+
+def camera_path(
+    scene: Scene,
+    n_frames: int = 24,
+    start: tuple[float, float, float] = (0, 2, -5),
+    end: tuple[float, float, float] = (0, 2, 20),
+) -> list[Scene]:
+    """Линейный пролёт камеры: n_frames сцен от start до end включительно."""
+    if n_frames < 2:
+        raise ValueError(f"n_frames должно быть не меньше 2, получено {n_frames}")
+    coords = np.linspace(
+        np.asarray(start, dtype=np.float64),
+        np.asarray(end, dtype=np.float64),
+        int(n_frames),
+    )
+    frames: list[Scene] = []
+    for index, row in enumerate(coords):
+        position = (float(row[0]), float(row[1]), float(row[2]))
+        frame = replace(with_camera(scene, position), name=f"{scene.name}_f{index:02d}")
+        frames.append(frame)
+    return frames
