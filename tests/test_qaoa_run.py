@@ -14,8 +14,12 @@ from lodq.qaoa import (
     assemble_values,
     build_qaoa_circuit,
     expectation_fn,
+    initial_points,
+    interp_init,
+    linear_ramp_init,
     make_estimator,
     normalize_operator,
+    random_init,
     toy_problem,
     transpile_for_aer,
 )
@@ -190,3 +194,125 @@ def test_expectation_fn_is_quiet_when_fast(toy_op: SparsePauliOp) -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         fn(np.zeros(2))
+
+
+def test_linear_ramp_init_by_hand() -> None:
+    gammas, betas = linear_ramp_init(4, dt=0.8)
+
+    np.testing.assert_allclose(gammas, [0.1, 0.3, 0.5, 0.7])
+    np.testing.assert_allclose(betas, [0.7, 0.5, 0.3, 0.1])
+
+
+@pytest.mark.parametrize("p", [1, 2, 3, 4])
+def test_linear_ramp_init_shape_and_monotonicity(p: int) -> None:
+    gammas, betas = linear_ramp_init(p)
+
+    assert gammas.shape == betas.shape == (p,)
+    assert np.all(np.diff(gammas) > 0)
+    assert np.all(np.diff(betas) < 0)
+    np.testing.assert_allclose(gammas + betas, np.full(p, 0.75))
+    if p == 1:
+        np.testing.assert_allclose((gammas, betas), [[0.375], [0.375]])
+
+
+@pytest.mark.parametrize(("p", "dt"), [(0, 0.75), (2, 0.0), (2, -1.0)])
+def test_linear_ramp_init_rejects_bad_arguments(p: int, dt: float) -> None:
+    with pytest.raises(ValueError, match="must be"):
+        linear_ramp_init(p, dt)
+
+
+def test_random_init_ranges_and_reproducibility() -> None:
+    gammas, betas = random_init(1000, np.random.default_rng(0))
+
+    assert gammas.shape == betas.shape == (1000,)
+    assert np.all((gammas >= 0) & (gammas <= np.pi))
+    assert np.all((betas >= 0) & (betas <= np.pi / 2))
+    assert gammas.max() > 3.0
+    assert betas.max() > 1.5
+    again = random_init(1000, np.random.default_rng(0))
+    np.testing.assert_array_equal(gammas, again[0])
+    np.testing.assert_array_equal(betas, again[1])
+
+
+def test_interp_init_by_hand() -> None:
+    gammas, betas = interp_init(np.array([1.0, 3.0]), np.array([0.6, 0.2]))
+
+    np.testing.assert_allclose(gammas, [1.0, 2.0, 3.0])
+    np.testing.assert_allclose(betas, [0.6, 0.4, 0.2])
+    np.testing.assert_allclose(interp_init([1.0, 2.0, 3.0], [0, 0, 0])[0], [1, 5 / 3, 7 / 3, 3])
+
+
+def test_interp_init_p1_duplicates_angles() -> None:
+    gammas, betas = interp_init([0.4], [0.3])
+
+    np.testing.assert_allclose(gammas, [0.4, 0.4])
+    np.testing.assert_allclose(betas, [0.3, 0.3])
+
+
+@pytest.mark.parametrize("p", [1, 2, 3])
+def test_interp_init_keeps_endpoints_and_constants(p: int) -> None:
+    gammas, betas = linear_ramp_init(p)
+
+    new_gammas, new_betas = interp_init(gammas, betas)
+
+    assert new_gammas.shape == new_betas.shape == (p + 1,)
+    assert (new_gammas[0], new_gammas[-1]) == pytest.approx((gammas[0], gammas[-1]))
+    assert (new_betas[0], new_betas[-1]) == pytest.approx((betas[0], betas[-1]))
+    assert np.all(np.diff(new_gammas) >= 0)
+    assert np.all(np.diff(new_betas) <= 0)
+    np.testing.assert_allclose(
+        interp_init(np.full(p, 0.7), np.full(p, 0.2))[0], np.full(p + 1, 0.7)
+    )
+
+
+@pytest.mark.parametrize(("gammas", "betas"), [([], []), ([0.1, 0.2], [0.1]), ([[0.1]], [[0.1]])])
+def test_interp_init_rejects_bad_shapes(gammas: list, betas: list) -> None:
+    with pytest.raises(ValueError, match="1-D"):
+        interp_init(gammas, betas)
+
+
+def test_initial_points_ramp_then_random() -> None:
+    points = initial_points(3, n_starts=5, seed=7)
+
+    assert len(points) == 5
+    assert all(x.shape == (6,) for x in points)
+    np.testing.assert_allclose(points[0], np.concatenate(linear_ramp_init(3)))
+    rng = np.random.default_rng(7)
+    for x in points[1:]:
+        np.testing.assert_array_equal(x, np.concatenate(random_init(3, rng)))
+    assert len({tuple(x) for x in points}) == 5
+
+
+def test_initial_points_reproducible_and_seed_dependent() -> None:
+    first = initial_points(2, n_starts=4, seed=1)
+    again = initial_points(2, n_starts=4, seed=1)
+    other = initial_points(2, n_starts=4, seed=2)
+
+    for a, b in zip(first, again, strict=True):
+        np.testing.assert_array_equal(a, b)
+    np.testing.assert_array_equal(first[0], other[0])
+    assert not np.allclose(first[1], other[1])
+
+
+def test_initial_points_uses_warm_start() -> None:
+    warm = interp_init([0.4], [0.3])
+
+    points = initial_points(2, n_starts=3, seed=0, warm_start=warm)
+
+    np.testing.assert_allclose(points[0], [0.4, 0.4, 0.3, 0.3])
+    assert len(points) == 3
+    np.testing.assert_array_equal(points[1], initial_points(2, n_starts=3, seed=0)[1])
+
+
+def test_initial_points_single_start() -> None:
+    points = initial_points(1, n_starts=1, seed=0)
+
+    assert len(points) == 1
+    np.testing.assert_allclose(points[0], [0.375, 0.375])
+
+
+def test_initial_points_rejects_bad_arguments() -> None:
+    with pytest.raises(ValueError, match="n_starts"):
+        initial_points(2, n_starts=0, seed=0)
+    with pytest.raises(ValueError, match="warm_start"):
+        initial_points(2, n_starts=1, seed=0, warm_start=([0.1], [0.2]))

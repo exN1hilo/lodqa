@@ -188,6 +188,65 @@ def expectation_fn(
     return Expectation(circuit_t, cost_op_t, estimator, slow_eval_s)
 
 
+def linear_ramp_init(p: int, dt: float = 0.75) -> tuple[np.ndarray, np.ndarray]:
+    if p < 1:
+        raise ValueError(f"p must be >= 1, got {p}")
+    if not dt > 0:
+        raise ValueError(f"dt must be > 0, got {dt}")
+    t = (np.arange(p) + 0.5) / p
+    return t * dt, (1 - t) * dt
+
+
+def random_init(p: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+    if p < 1:
+        raise ValueError(f"p must be >= 1, got {p}")
+    gammas = rng.uniform(0.0, np.pi, p)
+    betas = rng.uniform(0.0, np.pi / 2, p)
+    return gammas, betas
+
+
+def interp_init(gammas: np.ndarray, betas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    gamma_values = np.asarray(gammas, dtype=np.float64)
+    beta_values = np.asarray(betas, dtype=np.float64)
+    if gamma_values.ndim != 1 or gamma_values.size == 0 or beta_values.shape != gamma_values.shape:
+        raise ValueError(
+            "gammas and betas must be non-empty 1-D arrays of the same length, got "
+            f"{gamma_values.shape} and {beta_values.shape}"
+        )
+    p = gamma_values.size
+    i = np.arange(p + 1)
+
+    def interp(angles: np.ndarray) -> np.ndarray:
+        padded = np.concatenate(([0.0], angles, [0.0]))
+        return i / p * padded[i] + (p - i) / p * padded[i + 1]
+
+    return interp(gamma_values), interp(beta_values)
+
+
+def initial_points(
+    p: int,
+    n_starts: int,
+    seed: int,
+    warm_start: tuple[np.ndarray, np.ndarray] | None = None,
+) -> list[np.ndarray]:
+    if n_starts < 1:
+        raise ValueError(f"n_starts must be >= 1, got {n_starts}")
+    if warm_start is None:
+        gammas, betas = linear_ramp_init(p)
+    else:
+        gammas, betas = (np.asarray(a, dtype=np.float64) for a in warm_start)
+        if gammas.shape != (p,) or betas.shape != (p,):
+            raise ValueError(
+                f"warm_start must hold gammas and betas of shape ({p},), got "
+                f"{gammas.shape} and {betas.shape}"
+            )
+    rng = np.random.default_rng(seed)
+    points = [np.concatenate((gammas, betas))]
+    for _ in range(n_starts - 1):
+        points.append(np.concatenate(random_init(p, rng)))
+    return points
+
+
 def toy_problem() -> tuple[np.ndarray, np.ndarray, int]:
     v = np.array([[1.0, 0.3], [0.6, 0.2]], dtype=np.float64)
     dw = np.array([[2, 0], [1, 0]], dtype=np.int64)
