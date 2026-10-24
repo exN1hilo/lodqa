@@ -1,5 +1,6 @@
 """Figures rebuilt from saved runs, without launching QAOA again."""
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -339,4 +340,58 @@ def fig_landscape_p1(landscape_npz: str | Path, run_p1: dict[str, Any]) -> plt.F
     ax.set_xlabel("beta")
     ax.set_ylabel("gamma")
     save_figure(fig, "landscape_p1")
+    return fig
+
+
+def _qaoa_frame_ratios(frames_dir: str | Path) -> dict[int, float]:
+    root = Path(frames_dir)
+    if not root.is_dir():
+        return {}
+    found: dict[int, float] = {}
+    for path in sorted(root.glob("*.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        frame = payload.get("frame")
+        ratio = payload.get("ar_top1")
+        if ratio is None and isinstance(payload.get("metrics"), dict):
+            ratio = payload["metrics"].get("ar_top1")
+        if frame is not None and ratio is not None:
+            found[int(frame)] = float(ratio)
+    return found
+
+
+def fig_camera_path(path_json: str | Path, frames_dir: str | Path = "cache/path") -> plt.Figure:
+    """Greedy and QAOA approximation ratio along the camera path."""
+    payload = json.loads(Path(path_json).read_text(encoding="utf-8"))
+    frames = sorted(payload["frames"], key=lambda item: int(item["frame"]))
+    xs = [int(item["frame"]) for item in frames]
+    greedy = [float(item["ar_greedy"]) for item in frames]
+    qaoa = _qaoa_frame_ratios(frames_dir)
+    below = sum(value < 0.95 for value in greedy)
+    if qaoa:
+        title = f"Greedy stays below 0.95 on {below} of {len(frames)} frames."
+    else:
+        title = "QAOA: no data"
+    fig, ax = _new_ax(title)
+    ax.axhline(1.0, color=COLORS["dp"], linewidth=1.5)
+    label_line_end(ax, xs[-1], 1.0, "DP", COLORS["dp"])
+    ax.plot(xs, greedy, color=COLORS["greedy"], linewidth=2)
+    label_line_end(ax, xs[-1], greedy[-1], "Greedy", COLORS["greedy"])
+    ax.fill_between(
+        xs,
+        greedy,
+        0.95,
+        where=[value < 0.95 for value in greedy],
+        color=COLORS["greedy"],
+        alpha=0.18,
+        interpolate=True,
+    )
+    if qaoa:
+        paired = [qaoa[frame] for frame in xs if frame in qaoa]
+        paired_x = [frame for frame in xs if frame in qaoa]
+        ax.plot(paired_x, paired, color=COLORS["qaoa_x"], linewidth=2)
+        label_line_end(ax, paired_x[-1], paired[-1], "QAOA", COLORS["qaoa_x"])
+    ax.set_xlabel("frame")
+    ax.set_ylabel("approximation ratio")
+    ax.set_xlim(min(xs), max(xs))
+    save_figure(fig, "camera_path")
     return fig
