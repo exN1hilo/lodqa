@@ -1,13 +1,16 @@
 import numpy as np
 import pytest
 from qiskit import QuantumCircuit
+from qiskit.circuit import Parameter, ParameterVector
 from qiskit.quantum_info import SparsePauliOp, Statevector
 from scipy.linalg import expm
 
 from lodq.ising import ising_diagonal, qubo_to_ising, summary
 from lodq.metrics import Problem
-from lodq.qaoa import build_qaoa_circuit, normalize_operator
+from lodq.qaoa import assemble_values, build_qaoa_circuit, normalize_operator, split_params
 from lodq.qubo import build_qubo
+
+SMALL_OP = SparsePauliOp.from_list([("IIZ", -1.0), ("IZI", 0.4), ("ZZI", 0.7), ("ZIZ", -0.3)])
 
 
 @pytest.fixture
@@ -75,7 +78,7 @@ def test_build_qaoa_circuit_on_19_qubits(trap_op: SparsePauliOp, p: int) -> None
 
 @pytest.mark.parametrize("p", [1, 2])
 def test_build_qaoa_circuit_matches_exact_evolution(p: int) -> None:
-    op = SparsePauliOp.from_list([("IIZ", -1.0), ("IZI", 0.4), ("ZZI", 0.7), ("ZIZ", -0.3)])
+    op = SMALL_OP
     mixer = SparsePauliOp.from_list([("IIX", 1.0), ("IXI", 1.0), ("XII", 1.0)])
     gammas, betas = [0.8, -0.35][:p], [0.45, 1.1][:p]
 
@@ -92,3 +95,66 @@ def test_build_qaoa_circuit_matches_exact_evolution(p: int) -> None:
 def test_build_qaoa_circuit_rejects_bad_depth(trap_op: SparsePauliOp, p: int) -> None:
     with pytest.raises(ValueError, match="p должно быть"):
         build_qaoa_circuit(trap_op, p)
+
+
+@pytest.mark.parametrize("p", [1, 2, 3, 4, 12])
+def test_split_params_orders_by_layer(p: int) -> None:
+    circuit = build_qaoa_circuit(SMALL_OP, p)
+
+    gammas, betas = split_params(circuit)
+
+    assert [param.name for param in gammas] == [f"γ[{k}]" for k in range(p)]
+    assert [param.name for param in betas] == [f"β[{k}]" for k in range(p)]
+    assert list(circuit.parameters) == betas + gammas
+
+
+@pytest.mark.parametrize("p", [1, 2, 3, 4])
+def test_assemble_values_and_split_params_are_inverse(p: int) -> None:
+    circuit = build_qaoa_circuit(SMALL_OP, p)
+    rng = np.random.default_rng(p)
+    gammas, betas = rng.uniform(0, np.pi, p), rng.uniform(0, np.pi / 2, p)
+
+    values = assemble_values(circuit, gammas, betas)
+
+    assert values.shape == (2 * p,)
+    np.testing.assert_array_equal(values, np.concatenate((betas, gammas)))
+    by_param = dict(zip(circuit.parameters, values, strict=True))
+    gamma_params, beta_params = split_params(circuit)
+    np.testing.assert_array_equal([by_param[param] for param in gamma_params], gammas)
+    np.testing.assert_array_equal([by_param[param] for param in beta_params], betas)
+
+
+def test_assemble_values_binds_angles_to_their_gates() -> None:
+    circuit = build_qaoa_circuit(SMALL_OP, 3)
+    gammas, betas = [0.8, -0.35, 0.2], [0.45, 1.1, 0.05]
+
+    actual = Statevector(circuit.assign_parameters(assemble_values(circuit, gammas, betas)))
+
+    assert actual.equiv(Statevector(bind(circuit, gammas, betas)))
+
+
+@pytest.mark.parametrize(
+    ("gammas", "betas"),
+    [([0.1], [0.2, 0.3]), ([0.1, 0.2, 0.3], [0.2, 0.3]), ([[0.1, 0.2]], [0.2, 0.3])],
+)
+def test_assemble_values_rejects_wrong_lengths(gammas: list, betas: list) -> None:
+    circuit = build_qaoa_circuit(SMALL_OP, 2)
+    with pytest.raises(ValueError, match="форму"):
+        assemble_values(circuit, gammas, betas)
+
+
+def test_split_params_rejects_unknown_parameter() -> None:
+    circuit = build_qaoa_circuit(SMALL_OP, 1)
+    circuit.rz(Parameter("theta"), 0)
+    with pytest.raises(ValueError, match="theta"):
+        split_params(circuit)
+
+
+def test_split_params_rejects_unpaired_layers() -> None:
+    gamma, beta = ParameterVector("γ", 2), ParameterVector("β", 1)
+    circuit = QuantumCircuit(1)
+    circuit.rz(gamma[0], 0)
+    circuit.rz(gamma[1], 0)
+    circuit.rx(beta[0], 0)
+    with pytest.raises(ValueError, match="2 γ, 1 β"):
+        split_params(circuit)
