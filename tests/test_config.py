@@ -143,3 +143,12 @@ def test_dump_config_roundtrip() -> None:
     assert data["penalty_B"] == "auto"
     assert json.loads(json.dumps(data)) == data
     assert ExperimentConfig.model_validate(data) == cfg
+
+
+def test_smoke_config() -> None:
+    cfg = load_config(Path(__file__).resolve().parents[1] / "configs" / "smoke.yaml")
+    assert cfg.name == "smoke"
+    assert cfg.scene_presets == ["default"]
+    assert cfg.p_list == [1]
+    assert cfg.seeds == [0]
+    assert cfg.maxiter == 50

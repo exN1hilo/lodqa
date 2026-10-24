@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from lodq import storage
+from lodq.config import ExperimentConfig, dump_config, load_config
 from lodq.storage import git_hash, load_runs, run_exists, runs_to_dataframe, save_run
 
 
@@ -198,3 +199,16 @@ def test_runs_to_dataframe_from_disk(tmp_path: Path) -> None:
     assert {"git_hash", "timestamp"} <= set(df.columns)
     assert df.groupby("qaoa.p")["metrics.ar_top1"].mean().to_dict() == {1: 0.9, 2: 0.95}
     np.testing.assert_array_equal(df.loc[0, "qaoa.probs_array"], np.full(4, 0.25))
+
+
+def test_run_json_has_config_seed_git_time(tmp_path: Path) -> None:
+    cfg = load_config(Path(__file__).resolve().parents[1] / "configs" / "smoke.yaml")
+    seed = np.int64(cfg.seeds[0])
+    save_run({"config": dump_config(cfg), "seed": seed}, "smoke__x__s0__p1", root=tmp_path)
+
+    (run,) = load_runs(tmp_path)
+    assert ExperimentConfig.model_validate(run["config"]) == cfg
+    assert run["seed"] == 0
+    assert run["git_hash"] == git_hash()
+    assert run["timestamp"]
+    assert run_exists(tmp_path, "smoke__x__s0__p1")
