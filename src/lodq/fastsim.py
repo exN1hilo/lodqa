@@ -1,9 +1,12 @@
 """Exact statevector of a QAOA circuit, used when the experiment backend is fastsim.
 
-Numpy only. Matches qaoa_ansatz: each layer applies exp(-iγ_k H_C), then exp(-iβ_k ΣX).
+Matches qaoa_ansatz: each layer applies exp(-iγ_k H_C), then exp(-iβ_k ΣX).
 """
 
 import numpy as np
+from scipy.optimize import minimize
+
+from lodq.qaoa import linear_ramp_init, random_init
 
 
 def qaoa_state(
@@ -39,6 +42,67 @@ def qaoa_state(
     return psi
 
 
-def probabilities(state: np.ndarray) -> np.ndarray:
-    amplitudes = np.asarray(state)
-    return np.real(amplitudes * np.conjugate(amplitudes))
+def probabilities(psi: np.ndarray) -> np.ndarray:
+    return np.abs(np.asarray(psi)) ** 2
+
+
+def expectation(psi: np.ndarray, energies: np.ndarray) -> float:
+    return float(probabilities(psi) @ np.asarray(energies, dtype=np.float64))
+
+
+def _starts(
+    p: int,
+    n_starts: int,
+    seed: int,
+    warm_start: tuple[np.ndarray, np.ndarray] | None,
+) -> list[np.ndarray]:
+    """warm_start (if given), then the linear ramp, then random starts up to n_starts."""
+    if n_starts < 1:
+        raise ValueError(f"n_starts must be >= 1, got {n_starts}")
+    points = []
+    if warm_start is not None:
+        gammas, betas = (np.asarray(a, dtype=np.float64) for a in warm_start)
+        if gammas.shape != (p,) or betas.shape != (p,):
+            raise ValueError(
+                f"warm_start must hold gammas and betas of shape ({p},), got "
+                f"{gammas.shape} and {betas.shape}"
+            )
+        points.append(np.concatenate((gammas, betas)))
+    points.append(np.concatenate(linear_ramp_init(p)))
+    rng = np.random.default_rng(seed)
+    while len(points) < n_starts:
+        points.append(np.concatenate(random_init(p, rng)))
+    return points[:n_starts]
+
+
+def optimize_fast(
+    energies_scaled: np.ndarray,
+    n: int,
+    p: int,
+    seed: int = 0,
+    n_starts: int = 20,
+    maxiter: int = 500,
+    warm_start: tuple[np.ndarray, np.ndarray] | None = None,
+) -> tuple[np.ndarray, np.ndarray, float, list[float]]:
+    """Multistart COBYLA on the exact <H_C>. Returns (gammas, betas, best, history).
+
+    best and history are in the units of energies_scaled; history holds every objective
+    value of the start that reached best.
+    """
+    if p < 1:
+        raise ValueError(f"p must be >= 1, got {p}")
+    energies = np.asarray(energies_scaled, dtype=np.float64)
+
+    best_x, best_value, best_history = None, np.inf, []
+    for x0 in _starts(p, n_starts, seed, warm_start):
+        history: list[float] = []
+
+        def objective(x: np.ndarray, history: list[float] = history) -> float:
+            value = expectation(qaoa_state(energies, x[:p], x[p:], n), energies)
+            history.append(value)
+            return value
+
+        res = minimize(objective, x0, method="COBYLA", options={"maxiter": maxiter, "rhobeg": 0.3})
+        if res.fun < best_value:
+            best_x, best_value, best_history = res.x, float(res.fun), history
+    return best_x[:p].copy(), best_x[p:].copy(), best_value, best_history

@@ -2,9 +2,15 @@ import numpy as np
 import pytest
 from qiskit.quantum_info import SparsePauliOp, Statevector
 
-from lodq.fastsim import probabilities, qaoa_state
+from lodq.fastsim import expectation, optimize_fast, probabilities, qaoa_state
 from lodq.ising import ising_diagonal, qubo_to_ising
-from lodq.qaoa import assemble_values, build_qaoa_circuit, normalize_operator, toy_problem
+from lodq.qaoa import (
+    assemble_values,
+    build_qaoa_circuit,
+    linear_ramp_init,
+    normalize_operator,
+    toy_problem,
+)
 from lodq.qubo import all_energies, build_qubo
 
 SMALL_OP = SparsePauliOp.from_list([("IIZ", -1.0), ("IZI", 0.4), ("ZZI", 0.7), ("ZIZ", -0.3)])
@@ -64,3 +70,59 @@ def test_rejects_bad_shapes() -> None:
         qaoa_state(np.zeros(7), [0.1], [0.1], 3)
     with pytest.raises(ValueError, match="gammas and betas"):
         qaoa_state(np.zeros(8), [0.1, 0.2], [0.1], 3)
+
+
+@pytest.fixture
+def toy_energies() -> tuple[np.ndarray, int]:
+    v, dw, dW = toy_problem()
+    qubo = build_qubo(v, dw, dW, 1.5 * v.max(), 1.2 * (v - v[:, -1:]).max())
+    _, scale = normalize_operator(qubo_to_ising(qubo)[0])
+    return all_energies(qubo) / scale, qubo.n
+
+
+def test_expectation_matches_qiskit_estimate() -> None:
+    cost, _ = normalize_operator(SMALL_OP)
+    gammas, betas = np.array([0.7, -0.3]), np.array([0.2, 1.1])
+    energies = ising_diagonal(cost, 0.0, _all_bits(cost.num_qubits))
+    psi = qaoa_state(energies, gammas, betas, cost.num_qubits)
+    reference = Statevector(_reference(cost, gammas, betas)).expectation_value(cost)
+    assert np.isclose(expectation(psi, energies), reference.real)
+
+
+def test_optimize_fast_beats_uniform_and_ramp(toy_energies: tuple[np.ndarray, int]) -> None:
+    energies, n = toy_energies
+    gammas, betas, best, history = optimize_fast(energies, n, p=2, n_starts=5, maxiter=200)
+    assert gammas.shape == betas.shape == (2,)
+    ramp = expectation(qaoa_state(energies, *linear_ramp_init(2), n), energies)
+    assert best <= ramp + 1e-12
+    assert best < energies.mean()
+    assert np.isclose(min(history), best)
+    assert np.isclose(expectation(qaoa_state(energies, gammas, betas, n), energies), best)
+
+
+def test_optimize_fast_is_deterministic(toy_energies: tuple[np.ndarray, int]) -> None:
+    energies, n = toy_energies
+    first = optimize_fast(energies, n, p=1, seed=3, n_starts=4, maxiter=100)
+    second = optimize_fast(energies, n, p=1, seed=3, n_starts=4, maxiter=100)
+    np.testing.assert_array_equal(first[0], second[0])
+    np.testing.assert_array_equal(first[1], second[1])
+    assert first[2] == second[2] and first[3] == second[3]
+
+
+def test_optimize_fast_starts_from_warm_start(toy_energies: tuple[np.ndarray, int]) -> None:
+    energies, n = toy_energies
+    warm = optimize_fast(energies, n, p=2, n_starts=5, maxiter=200)
+    *_, best, history = optimize_fast(energies, n, p=2, n_starts=1, maxiter=50, warm_start=warm[:2])
+    warm_value = expectation(qaoa_state(energies, *warm[:2], n), energies)
+    assert np.isclose(history[0], warm_value)
+    assert best <= warm_value + 1e-12
+
+
+def test_optimize_fast_rejects_bad_arguments(toy_energies: tuple[np.ndarray, int]) -> None:
+    energies, n = toy_energies
+    with pytest.raises(ValueError, match="warm_start"):
+        optimize_fast(energies, n, p=2, warm_start=(np.zeros(1), np.zeros(1)))
+    with pytest.raises(ValueError, match="n_starts"):
+        optimize_fast(energies, n, p=1, n_starts=0)
+    with pytest.raises(ValueError, match="p must be"):
+        optimize_fast(energies, n, p=0)
