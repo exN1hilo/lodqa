@@ -4,7 +4,7 @@ from itertools import product
 import numpy as np
 import pytest
 
-from lodq.metrics import toy_trap_problem
+from lodq.metrics import Problem, toy_trap_problem
 from lodq.qubo import (
     Qubo,
     bits_from_bitstring,
@@ -243,3 +243,70 @@ def test_bits_from_bitstring_rejects_nonbinary_characters(s: str) -> None:
 def test_bitstring_from_bits_rejects_invalid_bits(bits: np.ndarray) -> None:
     with pytest.raises(ValueError, match="bits"):
         bitstring_from_bits(bits)
+
+
+@pytest.fixture
+def trap_qubo(trap: Problem) -> Qubo:
+    return build_qubo(trap.v, trap.dw, trap.dW, A=1.5, B=1.02)
+
+
+def test_trap_qubo_dimensions_and_upper_triangle(trap_qubo: Qubo) -> None:
+    assert trap_qubo.n == 19
+    assert trap_qubo.Q.shape == (19, 19)
+    assert trap_qubo.A == 1.5
+    assert trap_qubo.B == 1.02
+    np.testing.assert_array_equal(trap_qubo.Q, np.triu(trap_qubo.Q))
+
+
+def test_energy_equals_negative_value_for_all_feasible_choices(
+    trap: Problem, trap_qubo: Qubo
+) -> None:
+    checked = 0
+    for choice in product(range(3), repeat=5):
+        used = sum(trap.dw[i, level] for i, level in enumerate(choice))
+        if used > trap.dW:
+            continue
+        value = sum(trap.v[i, level] for i, level in enumerate(choice))
+        bits = encode(choice, trap_qubo, trap.dw)
+        assert energy(bits, trap_qubo) == pytest.approx(-value, abs=1e-9, rel=0)
+        checked += 1
+    assert checked > 0
+
+
+def test_decode_encode_for_all_feasible_choices(trap: Problem, trap_qubo: Qubo) -> None:
+    checked = 0
+    for choice in product(range(3), repeat=5):
+        used = sum(trap.dw[i, level] for i, level in enumerate(choice))
+        if used > trap.dW:
+            continue
+        bits = encode(choice, trap_qubo, trap.dw)
+        assert decode(bits, trap_qubo) == choice
+        assert is_feasible(bits, trap_qubo, trap.dw) is True
+        checked += 1
+    assert checked > 0
+
+
+def test_two_selected_lods_are_invalid(trap: Problem, trap_qubo: Qubo) -> None:
+    bits = encode((2, 2, 2, 2, 2), trap_qubo, trap.dw)
+    bits[0] = 1
+    assert decode(bits, trap_qubo) is None
+    assert is_feasible(bits, trap_qubo, trap.dw) is False
+
+
+def test_bitstring_selects_only_qubit_18() -> None:
+    bitstring = "1" + "0" * 18
+    bits = bits_from_bitstring(bitstring, 19)
+    expected = np.zeros(19, dtype=np.int8)
+    expected[18] = 1
+    np.testing.assert_array_equal(bits, expected)
+    assert bitstring_from_bits(bits) == bitstring
+
+
+def test_energy_batch_of_100_matches_individual_calls(trap_qubo: Qubo) -> None:
+    rng = np.random.default_rng(42)
+    bits = rng.integers(0, 2, size=(100, trap_qubo.n), dtype=np.int8)
+    expected = np.array([energy(state, trap_qubo) for state in bits])
+    actual = energy(bits, trap_qubo)
+    assert isinstance(actual, np.ndarray)
+    assert actual.shape == (100,)
+    np.testing.assert_allclose(actual, expected, atol=1e-9, rtol=0)
