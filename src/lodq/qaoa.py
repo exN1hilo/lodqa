@@ -24,7 +24,7 @@ from qiskit_aer.primitives import SamplerV2 as AerSamplerV2
 from scipy.optimize import minimize
 
 from lodq.ising import qubo_to_ising
-from lodq.qubo import Qubo, bits_from_bitstring, energy
+from lodq.qubo import Qubo, all_energies, bits_from_bitstring, energy
 from lodq.storage import save_run
 
 PARAM_RE = re.compile(r"(?P<kind>[γβ])\[(?P<index>\d+)\]")
@@ -394,7 +394,14 @@ def run_qaoa(
     warm_start: tuple[np.ndarray, np.ndarray] | None = None,
     backend: str = "aer",
     mixer: str = "x",
+    energies: np.ndarray | None = None,
 ) -> QAOAResult:
+    """QAOA with multistart COBYLA.
+
+    backend='fastsim' optimizes the exact <H_C> from the numpy statevector in lodq.fastsim
+    and samples the final counts with Aer. energies (all 2^n QUBO energies, e.g. from the
+    cache) is used only there; without it they are computed with all_energies.
+    """
     if objective not in OBJECTIVES:
         raise ValueError(f"unknown objective {objective!r}: expected one of {OBJECTIVES}")
     if mixer not in ("x", "xy"):
@@ -407,6 +414,8 @@ def run_qaoa(
             )
         if qubo.A != 0:
             raise ValueError("Для mixer='xy' нужен QUBO с A=0, без штрафа one-hot")
+    if backend == "fastsim" and objective != "energy":
+        raise ValueError(f"backend='fastsim' supports only objective='energy', got {objective!r}")
     start = time.perf_counter()
     op, const = qubo_to_ising(qubo)
     cost_op, scale = normalize_operator(op)
@@ -414,32 +423,46 @@ def run_qaoa(
         circuit = build_qaoa_circuit_xy(cost_op, p, qubo.N, qubo.M, qubo.K)
     else:
         circuit = build_qaoa_circuit(cost_op, p)
-    circuit_t = transpile_for_aer(circuit, seed)
-    estimator = make_estimator(backend, seed=seed)
-    sampler = make_sampler(backend, seed=seed)
     measured_t = measure_for_aer(circuit, seed)
 
-    def make_objective() -> Expectation | CVaRObjective:
-        if objective == "cvar":
-            return cvar_fn(measured_t, qubo, sampler, cvar_alpha)
-        return expectation_fn(circuit_t, cost_op, estimator)
+    if backend == "fastsim":
+        from lodq.fastsim import _optimize_fast  # fastsim imports this module
 
-    best_fn, best_x, best_value, n_evals = None, None, np.inf, 0
-    for x0 in initial_points(p, n_starts, seed, warm_start):
-        fn = make_objective()
-        res = minimize(fn, x0, method="COBYLA", options={"maxiter": maxiter, "rhobeg": 0.3})
-        n_evals += fn.n_evals
-        if res.fun < best_value:
-            best_fn, best_x, best_value = fn, res.x, float(res.fun)
-
-    if objective == "cvar":
-        history = list(best_fn.history)
-        best_expectation = scale * expectation_fn(circuit_t, cost_op, estimator)(best_x) + const
-    else:
-        history = [scale * value + const for value in best_fn.history]
+        values = all_energies(qubo) if energies is None else np.asarray(energies, np.float64)
+        if values.shape != (1 << qubo.n,):
+            raise ValueError(f"energies must have shape ({1 << qubo.n},), got {values.shape}")
+        gammas, betas, best_value, scaled_history, n_evals = _optimize_fast(
+            (values - const) / scale, qubo.n, p, seed, n_starts, maxiter, warm_start
+        )
+        history = [scale * value + const for value in scaled_history]
         best_expectation = scale * best_value + const
+        sampler = make_sampler("aer", seed=seed)
+    else:
+        circuit_t = transpile_for_aer(circuit, seed)
+        estimator = make_estimator(backend, seed=seed)
+        sampler = make_sampler(backend, seed=seed)
 
-    gammas, betas = best_x[:p], best_x[p:]
+        def make_objective() -> Expectation | CVaRObjective:
+            if objective == "cvar":
+                return cvar_fn(measured_t, qubo, sampler, cvar_alpha)
+            return expectation_fn(circuit_t, cost_op, estimator)
+
+        best_fn, best_x, best_value, n_evals = None, None, np.inf, 0
+        for x0 in initial_points(p, n_starts, seed, warm_start):
+            fn = make_objective()
+            res = minimize(fn, x0, method="COBYLA", options={"maxiter": maxiter, "rhobeg": 0.3})
+            n_evals += fn.n_evals
+            if res.fun < best_value:
+                best_fn, best_x, best_value = fn, res.x, float(res.fun)
+
+        if objective == "cvar":
+            history = list(best_fn.history)
+            best_expectation = scale * expectation_fn(circuit_t, cost_op, estimator)(best_x) + const
+        else:
+            history = [scale * value + const for value in best_fn.history]
+            best_expectation = scale * best_value + const
+        gammas, betas = best_x[:p], best_x[p:]
+
     return QAOAResult(
         p=p,
         mixer=mixer,
