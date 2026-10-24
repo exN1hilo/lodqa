@@ -8,6 +8,7 @@ from lodq.classical import (
     dp_solve,
     enumerate_feasible,
     evaluate_choice,
+    greedy_solve,
     solution_key,
 )
 from lodq.metrics import toy_trap_problem
@@ -179,3 +180,41 @@ def test_dp_solve_matches_brute_force(seed: int) -> None:
 
     assert solution_key(solution)[1:] == solution_key(expected)[1:]
     assert solution.value == pytest.approx(expected.value, abs=1e-12)
+
+
+def test_greedy_solve_trap_fixture() -> None:
+    problem = toy_trap_problem()
+
+    solution = greedy_solve(problem.v, problem.dw, problem.dW)
+
+    assert solution.choice == (0, 2, 2, 2, 2)
+    assert solution.value == pytest.approx(1.30)
+    assert solution.used == 8
+    assert solution.solver == "greedy"
+
+
+def test_greedy_solve_applies_free_upgrade_first() -> None:
+    utility = np.array([[1.0, 0.0], [0.5, 0.0]])
+    weights = np.array([[1, 0], [0, 0]], dtype=np.int64)
+
+    solution = greedy_solve(utility, weights, 0)
+
+    assert (solution.choice, solution.used) == ((1, 0), 0)
+
+
+def test_greedy_solve_ratio_tie_prefers_larger_ddv() -> None:
+    utility = np.array([[0.2, 0.0], [0.4, 0.0]])
+    weights = np.array([[1, 0], [2, 0]], dtype=np.int64)
+
+    solution = greedy_solve(utility, weights, 2)
+
+    assert solution.choice == (1, 0)
+
+
+def test_greedy_solve_ratio_and_ddv_tie_prefers_smaller_i() -> None:
+    utility = np.array([[0.3, 0.0], [0.3, 0.0]])
+    weights = np.array([[1, 0], [1, 0]], dtype=np.int64)
+
+    solution = greedy_solve(utility, weights, 1)
+
+    assert solution.choice == (0, 1)
