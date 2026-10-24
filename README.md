@@ -1,2 +1,3 @@
-# lodqa
-LOD-QAOA project
+# lod-qaoa
+
+Выбор уровней детализации (LOD) 3D-сцены под бюджет полигонов через QUBO/QAOA.
