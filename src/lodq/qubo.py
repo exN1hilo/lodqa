@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from hashlib import sha1
+from pathlib import Path
 
 import numpy as np
 
@@ -108,3 +110,37 @@ def bitstring_from_bits(bits: np.ndarray) -> str:
     if values.ndim != 1 or not np.all((values == 0) | (values == 1)):
         raise ValueError("bits должен быть одномерным массивом из 0 и 1")
     return "".join(str(int(bit)) for bit in values[::-1])
+
+
+def all_energies(qubo: Qubo, chunk: int = 65536) -> np.ndarray:
+    if chunk <= 0:
+        raise ValueError("chunk должен быть больше 0")
+    n = qubo.n
+    total = 1 << n
+    result = np.empty(total, dtype=np.float64)
+    shifts = np.arange(n)
+    for start in range(0, total, chunk):
+        stop = min(start + chunk, total)
+        k = np.arange(start, stop, dtype=np.int64)
+        bits = ((k[:, None] >> shifts) & 1).astype(np.float64)
+        result[start:stop] = energy(bits, qubo)
+    return result
+
+
+def cache_energies(qubo: Qubo, path: str | Path) -> Path:
+    path = Path(path)
+    values = all_energies(qubo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as stream:
+        np.save(stream, values, allow_pickle=False)
+    return path
+
+
+def load_energies(path: str | Path) -> np.ndarray:
+    return np.load(Path(path), allow_pickle=False)
+
+
+def energies_cache_path(name: str, qubo: Qubo) -> Path:
+    digest = sha1(qubo.Q.tobytes(), usedforsecurity=False)
+    digest.update(np.float64(qubo.offset).tobytes())
+    return Path("cache") / f"{name}_{digest.hexdigest()[:10]}.npy"
