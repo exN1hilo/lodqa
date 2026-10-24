@@ -1,9 +1,12 @@
 from itertools import combinations
+from pathlib import Path
 
 import numpy as np
 from qiskit.quantum_info import SparsePauliOp
 
-from lodq.qubo import Qubo
+from lodq.metrics import Problem, problem_from_scene, toy_trap_problem
+from lodq.qubo import Qubo, build_qubo
+from lodq.scene import load_scene
 
 TOL = 1e-12
 
@@ -63,3 +66,38 @@ def ising_diagonal(op: SparsePauliOp, const: float, bits: np.ndarray) -> np.ndar
     spins = 1.0 - 2.0 * batch
     result = spins @ h + np.sum((spins @ J) * spins, axis=1) + shift + const
     return float(result[0]) if single else result
+
+
+def summary(op: SparsePauliOp) -> dict[str, int | float]:
+    _, h, J = _coefficients(op)
+    coefs = np.abs(np.concatenate((h, J.ravel())))
+    return {
+        "n_qubits": op.num_qubits,
+        "n_z": int(np.count_nonzero(h)),
+        "n_zz": int(np.count_nonzero(J)),
+        "max_abs_coef": float(coefs.max(initial=0.0)),
+    }
+
+
+def _safe_qubo(problem: Problem) -> Qubo:
+    A = 1.5 * float(problem.v.max())
+    B = 1.2 * float((problem.v - problem.v[:, -1:]).max())
+    return build_qubo(problem.v, problem.dw, problem.dW, A, B)
+
+
+def main() -> None:
+    problems = {"trap": toy_trap_problem()}
+    for path in sorted(Path("scenes").glob("*.yaml")):
+        problems[path.stem] = problem_from_scene(load_scene(path))
+    print(f"{'сцена':12s} {'dW':>3s} {'n':>3s} {'Z':>3s} {'ZZ':>4s} {'max|coef|':>10s}")
+    for name, problem in problems.items():
+        op, _ = qubo_to_ising(_safe_qubo(problem))
+        info = summary(op)
+        print(
+            f"{name:12s} {problem.dW:3d} {info['n_qubits']:3d} {info['n_z']:3d} "
+            f"{info['n_zz']:4d} {info['max_abs_coef']:10.3f}"
+        )
+
+
+if __name__ == "__main__":
+    main()
