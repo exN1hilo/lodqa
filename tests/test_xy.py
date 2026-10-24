@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from qiskit import QuantumCircuit
@@ -6,7 +8,10 @@ from qiskit.quantum_info import Operator, SparsePauliOp, Statevector
 from scipy.linalg import expm
 
 from lodq import qaoa as qaoa_module
+from lodq import qubo as qubo_module
+from lodq.classical import dp_solve
 from lodq.ising import qubo_to_ising
+from lodq.metrics import Problem
 from lodq.qubo import Qubo, bits_from_bitstring, build_qubo, decode
 
 
@@ -224,3 +229,112 @@ def test_run_xy_qaoa_requires_zero_one_hot_penalty() -> None:
 def test_run_qaoa_rejects_unknown_mixer(xy_qubo: Qubo) -> None:
     with pytest.raises(ValueError, match="mixer"):
         qaoa_module.run_qaoa(xy_qubo, p=1, seed=0, mixer="unknown")
+
+
+def test_onehot_states_lists_all_choices_and_slack() -> None:
+    states = qubo_module.onehot_states(1, 2, 1)
+    assert states.shape == (4, 3)
+    assert {tuple(state) for state in states} == {(1, 0, 0), (1, 0, 1), (0, 1, 0), (0, 1, 1)}
+
+
+@pytest.mark.parametrize("N, M, K", [(2, 3, 0), (5, 3, 4), (0, 3, 2), (0, 1, 0)])
+def test_onehot_states_has_correct_size_and_valid_blocks(N: int, M: int, K: int) -> None:
+    states = qubo_module.onehot_states(N, M, K)
+    assert states.shape == (M**N * 2**K, N * M + K)
+    assert np.all((states == 0) | (states == 1))
+    blocks = states[:, : N * M].reshape(len(states), N, M)
+    np.testing.assert_array_equal(blocks.sum(axis=2), np.ones((len(states), N)))
+    assert len({tuple(state) for state in states}) == len(states)
+
+
+@pytest.mark.parametrize("counts", [(-1, 3, 0), (2, 0, 0), (2, 3, -1)])
+def test_onehot_states_rejects_invalid_sizes(counts: tuple[int, int, int]) -> None:
+    with pytest.raises(ValueError):
+        qubo_module.onehot_states(*counts)
+
+
+def test_verify_qubo_onehot_trap_without_one_hot_penalty(trap: Problem) -> None:
+    qubo = build_qubo(trap.v, trap.dw, trap.dW, A=0.0, B=1.02)
+    solution = dp_solve(trap.v, trap.dw, trap.dW)
+    report = qubo_module.verify_qubo_onehot(qubo, trap.v, trap.dw, solution)
+    assert report.ok is True
+    assert report.ground_choice == (2, 0, 0, 2, 2)
+    assert report.ground_index == 18508
+    assert report.ground_feasible is True
+    assert report.ground_energy == pytest.approx(-1.47, abs=1e-9, rel=0)
+    assert report.n_degenerate == 1
+    assert report.gap_to_infeasible >= 0.02
+
+
+def test_verify_qubo_onehot_excludes_invalid_blocks_and_same_choice_slack() -> None:
+    v = np.array([[1.0, 0.2]])
+    dw = np.array([[1, 0]])
+    qubo = build_qubo(v, dw, 1, A=0.0, B=0.1)
+    solution = dp_solve(v, dw, 1)
+    assert qubo_module.verify_qubo(qubo, v, dw, solution).ground_feasible is False
+    report = qubo_module.verify_qubo_onehot(qubo, v, dw, solution)
+    assert report.ok is True
+    assert report.ground_index == 1
+    assert report.ground_choice == (0,)
+    assert report.ground_energy == pytest.approx(-1.0)
+    assert report.gap_to_infeasible == float("inf")
+    assert report.gap_to_second_feasible == pytest.approx(0.8)
+
+
+def test_verify_qubo_onehot_rejects_budget_violation() -> None:
+    v = np.array([[1.0, 0.2]])
+    dw = np.array([[2, 0]])
+    qubo = build_qubo(v, dw, 1, A=0.0, B=0.1)
+    report = qubo_module.verify_qubo_onehot(qubo, v, dw, dp_solve(v, dw, 1))
+    assert report.ok is False
+    assert report.ground_choice == (0,)
+    assert report.ground_feasible is False
+    assert report.gap_to_infeasible == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("difference, n_degenerate", [(0.0, 2), (5e-10, 2), (2e-9, 1)])
+def test_verify_qubo_onehot_detects_degeneracy(difference: float, n_degenerate: int) -> None:
+    v = np.array([[1.0, 1.0 - difference]])
+    dw = np.zeros((1, 2), dtype=np.int64)
+    qubo = build_qubo(v, dw, 0, A=0.0, B=1.0)
+    report = qubo_module.verify_qubo_onehot(qubo, v, dw, dp_solve(v, dw, 0))
+    assert report.n_degenerate == n_degenerate
+    assert report.ok is (n_degenerate == 1)
+
+
+def test_verify_qubo_onehot_ties_use_lowest_full_basis_index() -> None:
+    v = np.array([[1.0, 0.0], [1.0, 0.0]])
+    dw = np.array([[1, 0], [1, 0]])
+    qubo = build_qubo(v, dw, 1, A=0.0, B=2.0)
+    report = qubo_module.verify_qubo_onehot(qubo, v, dw, dp_solve(v, dw, 1))
+    assert report.ground_index == 6
+    assert report.ground_choice == (1, 0)
+    assert report.n_degenerate == 2
+    assert report.ok is False
+
+
+def test_calibrate_penalty_B_onehot_chooses_smallest_valid_grid_value() -> None:
+    v = np.array([[1.0, 0.2]])
+    dw = np.array([[2, 0]])
+    B, report = qubo_module.calibrate_penalty_B_onehot(v, dw, 1, dp_solve(v, dw, 1))
+    assert B == pytest.approx(0.96)
+    assert report.ok is True
+    assert report.ground_choice == (1,)
+    assert report.gap_to_infeasible == pytest.approx(0.16)
+    assert report.gap_to_second_feasible == float("inf")
+
+
+def test_calibrate_penalty_B_onehot_trap(trap: Problem) -> None:
+    solution = dp_solve(trap.v, trap.dw, trap.dW)
+    B, report = qubo_module.calibrate_penalty_B_onehot(trap.v, trap.dw, trap.dW, solution)
+    assert B == pytest.approx(0.306)
+    assert report.ok is True
+    assert report.ground_choice == solution.choice
+
+
+def test_calibrate_penalty_B_onehot_reports_failure() -> None:
+    v = np.array([[1.0, 0.2]])
+    dw = np.array([[2, 0]])
+    solution = replace(dp_solve(v, dw, 1), choice=(0,))
+    with pytest.raises(RuntimeError):
+        qubo_module.calibrate_penalty_B_onehot(v, dw, 1, solution)
