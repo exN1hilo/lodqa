@@ -6,12 +6,26 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from lodq.classical import dp_solve, greedy_solve
 from lodq.config import ExperimentConfig, dump_config, load_config
 from lodq.evaluate import evaluate_counts, evaluate_probabilities, p_opt_random, random_baseline
 from lodq.fastsim import probabilities, qaoa_state
+from lodq.ising import qubo_to_ising
 from lodq.metrics import problem_from_scene
-from lodq.qaoa import QAOAResult, run_qaoa_sweep
+from lodq.qaoa import (
+    QAOAResult,
+    build_qaoa_circuit,
+    expectation_fn,
+    interp_init,
+    linear_ramp_init,
+    make_estimator,
+    normalize_operator,
+    run_qaoa,
+    run_qaoa_sweep,
+    transpile_for_aer,
+)
 from lodq.qubo import (
     Qubo,
     build_qubo,
@@ -21,7 +35,7 @@ from lodq.qubo import (
     load_energies,
 )
 from lodq.scene import load_scene
-from lodq.storage import save_run
+from lodq.storage import load_runs, run_exists, save_run
 
 
 def _penalties(name: str, problem: Any, cfg: ExperimentConfig, dp: Any) -> tuple[float, float]:
@@ -157,25 +171,94 @@ def _save_result(
     )
 
 
+def _tag(scene: str, mixer: str, seed: int, depth: int) -> str:
+    return f"{scene}__{mixer}__s{seed}__p{depth}"
+
+
+def _saved_angles(runs_root: str, tag: str) -> tuple[np.ndarray, np.ndarray] | None:
+    for run in load_runs(runs_root):
+        if run.get("tag") != tag:
+            continue
+        qaoa = run["qaoa"]
+        return (
+            np.asarray(qaoa["gammas"], dtype=np.float64),
+            np.asarray(qaoa["betas"], dtype=np.float64),
+        )
+    return None
+
+
+def _grow_angles(
+    gammas: np.ndarray, betas: np.ndarray, depth: int
+) -> tuple[np.ndarray, np.ndarray]:
+    gammas = np.asarray(gammas, dtype=np.float64)
+    betas = np.asarray(betas, dtype=np.float64)
+    while gammas.size < depth:
+        gammas, betas = interp_init(gammas, betas)
+    return gammas, betas
+
+
+def _sweep_kwargs(cfg: ExperimentConfig) -> dict[str, Any]:
+    return {
+        "n_starts": cfg.n_starts,
+        "maxiter": cfg.maxiter,
+        "shots": cfg.shots,
+        "objective": cfg.objective,
+        "cvar_alpha": cfg.cvar_alpha,
+        "backend": cfg.backend,
+    }
+
+
 def run_scene(prep: dict[str, Any], cfg: ExperimentConfig, runs_root: str) -> None:
-    """Sweep mixers, seeds, and p, then store one run record per depth."""
+    """Sweep mixers, seeds, and p, skipping combinations that are already stored."""
     for mixer in cfg.mixers:
         qubo = _qubo_for_mixer(prep, mixer)
         for seed in cfg.seeds:
+            tags = [_tag(prep["name"], mixer, seed, depth) for depth in cfg.p_list]
+            if all(run_exists(runs_root, tag) for tag in tags):
+                print(f"skip {prep['name']} {mixer} s{seed}")
+                continue
             started = time.perf_counter()
-            results = run_qaoa_sweep(
-                qubo,
-                list(cfg.p_list),
-                seed,
-                n_starts=cfg.n_starts,
-                maxiter=cfg.maxiter,
-                shots=cfg.shots,
-                objective=cfg.objective,
-                cvar_alpha=cfg.cvar_alpha,
-                backend=cfg.backend,
-            )
-            for result in results:
+            missing = [
+                depth
+                for depth, tag in zip(cfg.p_list, tags, strict=True)
+                if not run_exists(runs_root, tag)
+            ]
+            if len(missing) == len(cfg.p_list):
+                results = run_qaoa_sweep(qubo, list(cfg.p_list), seed, **_sweep_kwargs(cfg))
+                for result in results:
+                    _save_result(prep, cfg, runs_root, mixer, qubo, result, started)
+                continue
+            warm: tuple[np.ndarray, np.ndarray] | None = None
+            for depth, tag in zip(cfg.p_list, tags, strict=True):
+                if run_exists(runs_root, tag):
+                    loaded = _saved_angles(runs_root, tag)
+                    if loaded is not None:
+                        warm = loaded
+                    continue
+                warm_start = None if warm is None else _grow_angles(*warm, depth)
+                result = run_qaoa(qubo, depth, seed, warm_start=warm_start, **_sweep_kwargs(cfg))
                 _save_result(prep, cfg, runs_root, mixer, qubo, result, started)
+                warm = (result.gammas, result.betas)
+
+
+def estimate_time(prep: dict[str, Any], cfg: ExperimentConfig) -> float:
+    """Seconds for this scene: three <H> evaluations at max p, scaled by the grid."""
+    qubo = prep["qubo"]
+    depth = max(cfg.p_list)
+    operator, _const = qubo_to_ising(qubo)
+    cost, _scale = normalize_operator(operator)
+    circuit = transpile_for_aer(build_qaoa_circuit(cost, depth), 0)
+    objective = expectation_fn(circuit, cost, make_estimator(cfg.backend, seed=0), slow_eval_s=1e9)
+    gammas, betas = linear_ramp_init(depth)
+    point = np.concatenate((gammas, betas))
+    samples = []
+    for _ in range(3):
+        started = time.perf_counter()
+        objective(point)
+        samples.append(time.perf_counter() - started)
+    mean = sum(samples) / len(samples)
+    grid = cfg.maxiter * cfg.n_starts * len(cfg.seeds) * len(cfg.mixers) * len(cfg.p_list)
+    return mean * grid
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -196,6 +279,12 @@ def main(argv: list[str] | None = None) -> None:
         for scene, mixer, seed, depth in jobs:
             print(f"{scene} {mixer} {seed} {depth}")
         print(f"runs {len(jobs)}")
+        total = 0.0
+        for name in scenes:
+            seconds = estimate_time(prepare_scene(name, cfg), cfg)
+            total += seconds
+            print(f"{name} estimated {seconds:.1f} s")
+        print(f"estimated total {total:.1f} s")
         return
     for name in scenes:
         run_scene(prepare_scene(name, cfg), cfg, args.runs_root)
