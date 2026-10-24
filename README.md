@@ -1,0 +1,2 @@
+# lodqa
+LOD-QAOA project
