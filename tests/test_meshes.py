@@ -1,3 +1,5 @@
+import json
+import shutil
 from itertools import pairwise
 from pathlib import Path
 
@@ -9,10 +11,12 @@ from lodq.meshes import (
     SOURCES,
     base_meshes,
     bounding_sphere,
+    build_assets,
     make_lods,
     normalize_mesh,
     prepare_mesh,
     simplification_error,
+    update_scene_with_assets,
 )
 from lodq.scene import load_scene
 
@@ -169,6 +173,90 @@ def test_error_grows_with_lod() -> None:
 def test_error_empty_lod() -> None:
     with pytest.raises(ValueError, match="пустой"):
         simplification_error(prepare_mesh(shifted_sphere(), 2000), pv.PolyData())
+
+
+def test_build_assets(tmp_path: Path) -> None:
+    meshes = {"ball": prepare_mesh(shifted_sphere(), 2000), "box": prepare_mesh(pv.Cube(), 500)}
+    assets = build_assets(tmp_path, meshes=meshes)
+
+    assert list(assets) == ["ball", "box"]
+    for name, info in assets.items():
+        assert info["mesh_paths"] == [
+            (tmp_path / f"{name}_lod{j}.ply").as_posix() for j in range(3)
+        ]
+        assert [pv.read(path).n_cells for path in info["mesh_paths"]] == info["tri_counts"]
+        assert all(high > low for high, low in pairwise(info["tri_counts"]))
+        assert info["errors"][0] == 0.0 < info["errors"][1] < info["errors"][2]
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest == assets
+
+
+def test_update_scene_with_assets(tmp_path: Path) -> None:
+    path = tmp_path / "scene.yaml"
+    shutil.copy(ROOT / "scenes" / "default.yaml", path)
+    before = load_scene(path)
+    assets = {
+        "teapot": {
+            "tri_counts": [30000, 12000, 3000],
+            "errors": [0.0, 0.01, 0.02],
+            "mesh_paths": ["a.ply", "b.ply", "c.ply"],
+        },
+        "unknown": {
+            "tri_counts": [3, 2, 1],
+            "errors": [0.0, 0.1, 0.2],
+            "mesh_paths": ["x", "y", "z"],
+        },
+    }
+    update_scene_with_assets(path, assets)
+    after = load_scene(path)
+
+    for old, new in zip(before.objects, after.objects, strict=True):
+        if old.name == "teapot":
+            assert new.tri_counts == (30000, 12000, 3000)
+            assert new.mesh_paths == ("a.ply", "b.ply", "c.ply")
+            assert (new.position, new.radius, new.importance) == (
+                old.position,
+                old.radius,
+                old.importance,
+            )
+        else:
+            assert new == old
+    assert (after.name, after.camera, after.budget_W, after.block_size) == (
+        before.name,
+        before.camera,
+        before.budget_W,
+        before.block_size,
+    )
+
+
+def test_update_scene_rejects_invalid(tmp_path: Path) -> None:
+    path = tmp_path / "scene.yaml"
+    shutil.copy(ROOT / "scenes" / "default.yaml", path)
+    text = path.read_text(encoding="utf-8")
+    bad = {
+        "bunny": {"tri_counts": [100, 200, 50], "errors": [0, 0, 0], "mesh_paths": ["a", "b", "c"]}
+    }
+    with pytest.raises(ValueError, match="убывать"):
+        update_scene_with_assets(path, bad)
+    assert path.read_text(encoding="utf-8") == text
+
+
+def test_default_scene_matches_assets() -> None:
+    scene = load_scene(ROOT / "scenes" / "default.yaml")
+    manifest = json.loads((ROOT / "assets" / "lods" / "manifest.json").read_text(encoding="utf-8"))
+
+    assert sorted((ROOT / "assets" / "lods").glob("*.ply")) == sorted(
+        ROOT / path for obj in scene.objects for path in obj.mesh_paths
+    )
+    for obj in scene.objects:
+        assert [pv.read(ROOT / path).n_cells for path in obj.mesh_paths] == list(obj.tri_counts)
+        assert manifest[obj.name]["tri_counts"] == list(obj.tri_counts)
+        errors = manifest[obj.name]["errors"]
+        assert errors[0] == 0.0 < errors[1] < errors[2]
+
+    w_base = sum(obj.tri_counts[-1] for obj in scene.objects)
+    dW = (scene.budget_W - w_base) // scene.block_size
+    assert 8 <= dW <= 15
 
 
 @pytest.fixture(scope="module")

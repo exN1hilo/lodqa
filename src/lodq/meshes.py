@@ -1,11 +1,15 @@
+import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import pairwise
+from pathlib import Path
 
 import numpy as np
 import pyvista as pv
 from pyvista import examples
 from scipy.spatial import cKDTree
+
+from lodq.scene import load_scene, save_scene, validate_scene
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,3 +84,52 @@ def base_meshes(sources: dict[str, MeshSource] = SOURCES) -> dict[str, pv.PolyDa
             mesh = mesh.rotate_x(source.rotate_x)
         meshes[name] = prepare_mesh(mesh, source.n_tris)
     return meshes
+
+
+def build_assets(
+    out_dir: str | Path = "assets/lods", meshes: dict[str, pv.PolyData] | None = None
+) -> dict[str, dict[str, list]]:
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    assets = {}
+    for name, mesh in (base_meshes() if meshes is None else meshes).items():
+        lods = make_lods(mesh)
+        paths = [out / f"{name}_lod{j}.ply" for j in range(len(lods))]
+        for lod, path in zip(lods, paths, strict=True):
+            lod.save(path)
+        assets[name] = {
+            "tri_counts": [lod.n_cells for lod in lods],
+            "errors": [simplification_error(lods[0], lod) for lod in lods],
+            "mesh_paths": [path.as_posix() for path in paths],
+        }
+    (out / "manifest.json").write_text(json.dumps(assets, indent=2), encoding="utf-8")
+    return assets
+
+
+def update_scene_with_assets(scene_path: str | Path, assets: dict[str, dict[str, list]]) -> None:
+    scene = load_scene(scene_path)
+    objects = tuple(
+        replace(
+            obj,
+            tri_counts=tuple(assets[obj.name]["tri_counts"]),
+            mesh_paths=tuple(assets[obj.name]["mesh_paths"]),
+        )
+        if obj.name in assets
+        else obj
+        for obj in scene.objects
+    )
+    updated = replace(scene, objects=objects)
+    validate_scene(updated)
+    save_scene(updated, scene_path)
+
+
+def main() -> None:
+    assets = build_assets()
+    update_scene_with_assets("scenes/default.yaml", assets)
+    for name, info in assets.items():
+        errors = [round(e, 4) for e in info["errors"]]
+        print(f"{name:10s} tri_counts={info['tri_counts']} errors={errors}")
+
+
+if __name__ == "__main__":
+    main()

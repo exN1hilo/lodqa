@@ -1,0 +1,87 @@
+{
+  "bunny": {
+    "tri_counts": [
+      40000,
+      15999,
+      3999
+    ],
+    "errors": [
+      0.0,
+      0.02216481882868249,
+      0.035748012579367404
+    ],
+    "mesh_paths": [
+      "assets/lods/bunny_lod0.ply",
+      "assets/lods/bunny_lod1.ply",
+      "assets/lods/bunny_lod2.ply"
+    ]
+  },
+  "dragon": {
+    "tri_counts": [
+      43999,
+      17599,
+      4398
+    ],
+    "errors": [
+      0.0,
+      0.020137312520364666,
+      0.03647374805629577
+    ],
+    "mesh_paths": [
+      "assets/lods/dragon_lod0.ply",
+      "assets/lods/dragon_lod1.ply",
+      "assets/lods/dragon_lod2.ply"
+    ]
+  },
+  "teapot": {
+    "tri_counts": [
+      35999,
+      14399,
+      3598
+    ],
+    "errors": [
+      0.0,
+      0.019133549833379407,
+      0.032483259142148335
+    ],
+    "mesh_paths": [
+      "assets/lods/teapot_lod0.ply",
+      "assets/lods/teapot_lod1.ply",
+      "assets/lods/teapot_lod2.ply"
+    ]
+  },
+  "armadillo": {
+    "tri_counts": [
+      41999,
+      16798,
+      4198
+    ],
+    "errors": [
+      0.0,
+      0.016361681314381777,
+      0.032861539986465606
+    ],
+    "mesh_paths": [
+      "assets/lods/armadillo_lod0.ply",
+      "assets/lods/armadillo_lod1.ply",
+      "assets/lods/armadillo_lod2.ply"
+    ]
+  },
+  "lucy": {
+    "tri_counts": [
+      45998,
+      18399,
+      4598
+    ],
+    "errors": [
+      0.0,
+      0.0363232361909623,
+      0.04333638090939559
+    ],
+    "mesh_paths": [
+      "assets/lods/lucy_lod0.ply",
+      "assets/lods/lucy_lod1.ply",
+      "assets/lods/lucy_lod2.ply"
+    ]
+  }
+}
