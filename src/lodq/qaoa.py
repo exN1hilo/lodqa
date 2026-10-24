@@ -90,3 +90,9 @@ def circuit_stats(circuit: QuantumCircuit) -> dict[str, int | dict[str, int]]:
         "n_2q": sum(1 for instruction in circuit.data if _is_two_qubit(instruction)),
         "count_ops": dict(circuit.count_ops()),
     }
+
+
+def toy_problem() -> tuple[np.ndarray, np.ndarray, int]:
+    v = np.array([[1.0, 0.3], [0.6, 0.2]], dtype=np.float64)
+    dw = np.array([[2, 0], [1, 0]], dtype=np.int64)
+    return v, dw, 2

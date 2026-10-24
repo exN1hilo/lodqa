@@ -6,6 +6,7 @@ from qiskit.quantum_info import SparsePauliOp, Statevector
 from qiskit_aer import AerSimulator
 from scipy.linalg import expm
 
+from lodq.classical import brute_force
 from lodq.ising import ising_diagonal, qubo_to_ising, summary
 from lodq.metrics import Problem
 from lodq.qaoa import (
@@ -14,9 +15,10 @@ from lodq.qaoa import (
     circuit_stats,
     normalize_operator,
     split_params,
+    toy_problem,
     transpile_for_aer,
 )
-from lodq.qubo import build_qubo
+from lodq.qubo import Qubo, build_qubo, decode
 
 SMALL_OP = SparsePauliOp.from_list([("IIZ", -1.0), ("IZI", 0.4), ("ZZI", 0.7), ("ZIZ", -0.3)])
 
@@ -25,6 +27,20 @@ SMALL_OP = SparsePauliOp.from_list([("IIZ", -1.0), ("IZI", 0.4), ("ZZI", 0.7), (
 def trap_op(trap: Problem) -> SparsePauliOp:
     qubo = build_qubo(trap.v, trap.dw, trap.dW, A=1.5, B=1.02)
     op, _ = qubo_to_ising(qubo)
+    return normalize_operator(op)[0]
+
+
+@pytest.fixture
+def toy_qubo() -> Qubo:
+    v, dw, dW = toy_problem()
+    A = 1.5 * v.max()
+    B = 1.2 * (v - v[:, -1:]).max()
+    return build_qubo(v, dw, dW, A, B)
+
+
+@pytest.fixture
+def toy_op(toy_qubo: Qubo) -> SparsePauliOp:
+    op, _ = qubo_to_ising(toy_qubo)
     return normalize_operator(op)[0]
 
 
@@ -225,3 +241,71 @@ def test_circuit_stats_on_19_qubits(trap_op: SparsePauliOp, p: int) -> None:
     assert stats["num_qubits"] == 19
     assert stats["n_2q"] == stats["count_ops"]["rzz"] == 101 * p
     assert 0 < stats["depth_2q"] < stats["depth"]
+
+
+def test_toy_problem_is_six_qubit_trap(toy_qubo: Qubo) -> None:
+    v, dw, dW = toy_problem()
+
+    assert v.shape == dw.shape == (2, 2)
+    assert v.max() == 1.0
+    np.testing.assert_array_equal(dw[:, -1], 0)
+    assert (toy_qubo.N, toy_qubo.M, toy_qubo.K, toy_qubo.n) == (2, 2, 2, 6)
+    best = brute_force(v, dw, dW)
+    assert (best.choice, best.used) == ((0, 1), 2)
+    assert best.value == pytest.approx(1.2)
+
+
+def test_toy_ground_state_is_dp_optimum(toy_qubo: Qubo) -> None:
+    op, const = qubo_to_ising(toy_qubo)
+    k = np.arange(1 << toy_qubo.n)
+    bits = (k[:, None] >> np.arange(toy_qubo.n)) & 1
+
+    energies = ising_diagonal(op, const, bits)
+
+    assert decode(bits[energies.argmin()], toy_qubo) == (0, 1)
+    assert energies.min() == pytest.approx(-1.2, abs=1e-9, rel=0)
+
+
+@pytest.mark.parametrize("p", [1, 2, 3, 4])
+def test_toy_circuit_has_2p_parameters(toy_op: SparsePauliOp, p: int) -> None:
+    circuit = build_qaoa_circuit(toy_op, p)
+
+    assert circuit.num_qubits == 6
+    assert circuit.num_parameters == 2 * p
+
+
+@pytest.mark.parametrize("p", [1, 2, 3, 4])
+@pytest.mark.parametrize("transpile", [False, True])
+def test_zero_angles_give_uniform_distribution(
+    toy_op: SparsePauliOp, p: int, transpile: bool
+) -> None:
+    circuit = build_qaoa_circuit(toy_op, p)
+    if transpile:
+        circuit = transpile_for_aer(circuit, seed=0)
+
+    bound = circuit.assign_parameters(assemble_values(circuit, np.zeros(p), np.zeros(p)))
+    probabilities = Statevector(bound).probabilities()
+
+    np.testing.assert_allclose(probabilities, np.full(64, 1 / 64), atol=1e-12, rtol=0)
+
+
+@pytest.mark.parametrize("p", [1, 2, 3, 4])
+def test_toy_split_and_assemble_are_inverse(toy_op: SparsePauliOp, p: int) -> None:
+    circuit = build_qaoa_circuit(toy_op, p)
+    rng = np.random.default_rng(100 + p)
+    gammas, betas = rng.uniform(0, np.pi, p), rng.uniform(0, np.pi / 2, p)
+
+    by_param = dict(zip(circuit.parameters, assemble_values(circuit, gammas, betas), strict=True))
+    gamma_params, beta_params = split_params(circuit)
+
+    np.testing.assert_array_equal([by_param[param] for param in gamma_params], gammas)
+    np.testing.assert_array_equal([by_param[param] for param in beta_params], betas)
+
+
+def test_nonzero_angles_break_uniformity(toy_op: SparsePauliOp) -> None:
+    circuit = build_qaoa_circuit(toy_op, 1)
+
+    bound = circuit.assign_parameters(assemble_values(circuit, [0.7], [0.3]))
+    probabilities = Statevector(bound).probabilities()
+
+    assert np.ptp(probabilities) > 1e-3
