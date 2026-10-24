@@ -8,8 +8,8 @@ from typing import Any
 
 import numpy as np
 from qiskit import QuantumCircuit
-from qiskit.circuit import CircuitInstruction, Parameter
-from qiskit.circuit.library import qaoa_ansatz
+from qiskit.circuit import CircuitInstruction, Parameter, ParameterExpression, ParameterVector
+from qiskit.circuit.library import PauliEvolutionGate, StatePreparation, XXPlusYYGate, qaoa_ansatz
 from qiskit.primitives import (
     BaseEstimatorV2,
     BaseSamplerV2,
@@ -393,13 +393,27 @@ def run_qaoa(
     cvar_alpha: float = 0.1,
     warm_start: tuple[np.ndarray, np.ndarray] | None = None,
     backend: str = "aer",
+    mixer: str = "x",
 ) -> QAOAResult:
     if objective not in OBJECTIVES:
         raise ValueError(f"unknown objective {objective!r}: expected one of {OBJECTIVES}")
+    if mixer not in ("x", "xy"):
+        raise ValueError(f"unknown mixer {mixer!r}: expected 'x' or 'xy'")
+    if mixer == "xy":
+        if backend == "fastsim":
+            raise ValueError(
+                "backend='fastsim' не поддерживает mixer='xy'; "
+                "используйте backend='aer' или 'statevector'"
+            )
+        if qubo.A != 0:
+            raise ValueError("Для mixer='xy' нужен QUBO с A=0, без штрафа one-hot")
     start = time.perf_counter()
     op, const = qubo_to_ising(qubo)
     cost_op, scale = normalize_operator(op)
-    circuit = build_qaoa_circuit(cost_op, p)
+    if mixer == "xy":
+        circuit = build_qaoa_circuit_xy(cost_op, p, qubo.N, qubo.M, qubo.K)
+    else:
+        circuit = build_qaoa_circuit(cost_op, p)
     circuit_t = transpile_for_aer(circuit, seed)
     estimator = make_estimator(backend, seed=seed)
     sampler = make_sampler(backend, seed=seed)
@@ -428,7 +442,7 @@ def run_qaoa(
     gammas, betas = best_x[:p], best_x[p:]
     return QAOAResult(
         p=p,
-        mixer="x",
+        mixer=mixer,
         seed=seed,
         scale=scale,
         gammas=gammas,
@@ -477,3 +491,62 @@ def toy_problem() -> tuple[np.ndarray, np.ndarray, int]:
     v = np.array([[1.0, 0.3], [0.6, 0.2]], dtype=np.float64)
     dw = np.array([[2, 0], [1, 0]], dtype=np.int64)
     return v, dw, 2
+
+
+def w_state_circuit(n_objects: int, n_lods: int, n_slack: int) -> QuantumCircuit:
+    if n_objects < 0 or n_lods < 1 or n_slack < 0:
+        raise ValueError("n_objects и n_slack должны быть >= 0, n_lods должен быть >= 1")
+    n = n_objects * n_lods + n_slack
+    circuit = QuantumCircuit(n)
+    amplitudes = np.zeros(1 << n_lods, dtype=np.complex128)
+    amplitudes[1 << np.arange(n_lods)] = 1.0 / np.sqrt(n_lods)
+    preparation = StatePreparation(amplitudes)
+    for i in range(n_objects):
+        circuit.append(preparation, range(i * n_lods, (i + 1) * n_lods))
+    if n_slack:
+        circuit.h(range(n_objects * n_lods, n))
+    return circuit
+
+
+def xy_mixer_layer(
+    circuit: QuantumCircuit,
+    beta: float | ParameterExpression,
+    n_objects: int,
+    n_lods: int,
+    n_slack: int,
+) -> None:
+    if n_objects < 0 or n_lods < 1 or n_slack < 0:
+        raise ValueError("n_objects и n_slack должны быть >= 0, n_lods должен быть >= 1")
+    n = n_objects * n_lods + n_slack
+    if circuit.num_qubits < n:
+        raise ValueError(f"В схеме должно быть не меньше {n} кубитов")
+
+    pairs = list(pairwise(range(n_lods)))
+    if n_lods > 2:
+        pairs.append((n_lods - 1, 0))
+    for i in range(n_objects):
+        offset = i * n_lods
+        for j, k in pairs:
+            circuit.append(XXPlusYYGate(theta=2 * beta), [offset + j, offset + k])
+    if n_slack:
+        circuit.rx(2 * beta, range(n_objects * n_lods, n))
+
+
+def build_qaoa_circuit_xy(
+    cost_op: SparsePauliOp,
+    p: int,
+    n_objects: int,
+    n_lods: int,
+    n_slack: int,
+) -> QuantumCircuit:
+    if p < 1:
+        raise ValueError(f"p must be >= 1, got {p}")
+    gamma = ParameterVector("γ", p)
+    beta = ParameterVector("β", p)
+    circuit = w_state_circuit(n_objects, n_lods, n_slack)
+    if cost_op.num_qubits != circuit.num_qubits:
+        raise ValueError("Число кубитов cost_op должно совпадать с размером XY-схемы")
+    for k in range(p):
+        circuit.append(PauliEvolutionGate(cost_op, time=gamma[k]), range(circuit.num_qubits))
+        xy_mixer_layer(circuit, beta[k], n_objects, n_lods, n_slack)
+    return circuit

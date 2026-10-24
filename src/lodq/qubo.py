@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from hashlib import sha1
+from itertools import product
 from pathlib import Path
 
 import numpy as np
@@ -251,4 +252,84 @@ def calibrate_penalties(
         print(table)
     if best is None:
         raise RuntimeError(f"Не удалось подобрать штрафы:\n{table}")
+    return best
+
+
+def onehot_states(N: int, M: int, K: int) -> np.ndarray:
+    if N < 0 or M < 1 or K < 0:
+        raise ValueError("N и K должны быть >= 0, M должен быть >= 1")
+    n_choices = M**N
+    n_slack_states = 1 << K
+    choices = np.array(list(product(range(M), repeat=N)), dtype=np.intp).reshape(n_choices, N)
+    x = np.eye(M, dtype=np.int8)[choices].reshape(n_choices, N * M)
+    slack_indices = np.arange(n_slack_states, dtype=np.int64)
+    slack = ((slack_indices[:, None] >> np.arange(K)) & 1).astype(np.int8)
+    return np.concatenate(
+        (np.repeat(x, n_slack_states, axis=0), np.tile(slack, (n_choices, 1))), axis=1
+    )
+
+
+def verify_qubo_onehot(
+    qubo: Qubo,
+    v: np.ndarray,
+    dw: np.ndarray,
+    dp_solution: Solution,
+    delta: float = 0.02,
+) -> VerifyReport:
+    if np.shape(v) != (qubo.N, qubo.M) or np.shape(dw) != (qubo.N, qubo.M):
+        raise ValueError("v и dw должны иметь форму (N, M), соответствующую QUBO")
+    states = onehot_states(qubo.N, qubo.M, qubo.K)
+    values = energy(states, qubo)
+    blocks = states[:, : qubo.N * qubo.M].reshape(len(states), qubo.N, qubo.M)
+    choices = blocks.argmax(axis=2)
+    used = np.asarray(dw)[np.arange(qubo.N), choices].sum(axis=1)
+    feasible = used <= qubo.dW
+
+    indices = states @ (1 << np.arange(qubo.n, dtype=np.int64))
+    ground_energy = float(values.min())
+    ground_rows = np.flatnonzero(values == ground_energy)
+    ground_row = int(ground_rows[np.argmin(indices[ground_rows])])
+    ground_choice = tuple(int(level) for level in choices[ground_row])
+    ground_feasible = bool(feasible[ground_row])
+    n_degenerate = int(np.count_nonzero(np.abs(values - ground_energy) <= 1e-9))
+    gap_to_infeasible = float(np.min(values[~feasible], initial=np.inf) - ground_energy)
+    other_feasible = feasible & np.any(choices != choices[ground_row], axis=1)
+    gap_to_second_feasible = float(np.min(values[other_feasible], initial=np.inf) - ground_energy)
+    ok = (
+        ground_feasible
+        and ground_choice == dp_solution.choice
+        and n_degenerate == 1
+        and gap_to_infeasible >= delta
+    )
+    return VerifyReport(
+        ok=ok,
+        ground_index=int(indices[ground_row]),
+        ground_choice=ground_choice,
+        ground_feasible=ground_feasible,
+        ground_energy=ground_energy,
+        n_degenerate=n_degenerate,
+        gap_to_infeasible=gap_to_infeasible,
+        gap_to_second_feasible=gap_to_second_feasible,
+    )
+
+
+def calibrate_penalty_B_onehot(
+    v: np.ndarray, dw: np.ndarray, dW: int, dp_solution: Solution
+) -> tuple[float, VerifyReport]:
+    _, B0 = default_penalties(v)
+    best: tuple[float, VerifyReport] | None = None
+    rows = ["sB B ok gap_to_infeasible gap_to_second_feasible"]
+    for scale in (1.0, 0.8, 0.6, 0.5, 0.4, 0.3):
+        B = float(scale * B0)
+        qubo = build_qubo(v, dw, dW, A=0.0, B=B)
+        report = verify_qubo_onehot(qubo, v, dw, dp_solution)
+        rows.append(
+            f"{scale:g} {B:.9g} {report.ok} "
+            f"{report.gap_to_infeasible:.9g} {report.gap_to_second_feasible:.9g}"
+        )
+        if report.ok and (best is None or B < best[0]):
+            best = (B, report)
+    if best is None:
+        table = "\n".join(rows)
+        raise RuntimeError(f"Не удалось подобрать B в one-hot подпространстве:\n{table}")
     return best
