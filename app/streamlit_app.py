@@ -6,6 +6,7 @@ from lodq.demo import (
     LIVE_P,
     budget_range,
     classical_record,
+    headline,
     live_record,
     load_frames,
     scene_frames,
@@ -59,3 +60,6 @@ st.caption(
     f"budget {budget:,} triangles (dW = {record['problem']['dW']}) · QAOA: {source}"
 )
 st.session_state["record"] = record
+
+for column, card in zip(st.columns(4), headline(record), strict=True):
+    column.metric(card["label"], card["value"], card["delta"], help=card["help"])

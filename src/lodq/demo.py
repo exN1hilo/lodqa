@@ -238,3 +238,55 @@ def live_record(
     )
     live["timings"] = {"frame_s": time.perf_counter() - started}
     return json.loads(json.dumps(live, cls=NumpyEncoder))
+
+
+def qaoa_metrics(record: dict[str, Any]) -> dict[str, Any] | None:
+    return record.get("metrics_exact") or record.get("metrics")
+
+
+def headline(record: dict[str, Any]) -> list[dict[str, str | None]]:
+    ar_greedy = float(record["ar_greedy"])
+    metrics = qaoa_metrics(record)
+    cards: list[dict[str, str | None]] = [
+        {
+            "label": "V_DP",
+            "value": f"{record['dp']['value']:.3f}",
+            "delta": None,
+            "help": "Optimal utility from dynamic programming.",
+        },
+        {
+            "label": "AR Greedy",
+            "value": f"{ar_greedy:.3f}",
+            "delta": f"{ar_greedy - 1:+.3f} vs DP" if ar_greedy < 1 else None,
+            "help": "Greedy utility divided by V_DP.",
+        },
+    ]
+    if metrics is None:
+        cards.append(
+            {"label": "AR QAOA (top-1)", "value": "—", "delta": None, "help": "QAOA not run."}
+        )
+        cards.append(
+            {"label": "Optimum amplification", "value": "—", "delta": None, "help": "QAOA not run."}
+        )
+        return cards
+    ar_qaoa = float(metrics["ar_top1"])
+    source = "exact distribution" if record.get("metrics_exact") else "sampled counts"
+    cards.append(
+        {
+            "label": "AR QAOA (top-1)",
+            "value": f"{ar_qaoa:.3f}",
+            "delta": f"{ar_qaoa - ar_greedy:+.3f} vs Greedy",
+            "help": f"Most probable feasible bitstring divided by V_DP, from {source}.",
+        }
+    )
+    uniform = float(record["random"]["p_opt"])
+    cards.append(
+        {
+            "label": "Optimum amplification",
+            "value": f"{float(metrics['amplification']):.2f}×",
+            "delta": None,
+            "help": f"P(optimum) = {float(metrics['p_opt']):.4f} from {source}, "
+            f"{uniform:.2e} for uniform sampling.",
+        }
+    )
+    return cards

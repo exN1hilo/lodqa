@@ -15,6 +15,7 @@ from lodq.demo import (
     classical_record,
     frame_penalties,
     frame_scene,
+    headline,
     live_record,
     load_frames,
     load_path,
@@ -331,3 +332,78 @@ def test_app_budget_change_enables_live_run(
     assert "live, p = 1" in at.caption[0].value
     assert at.session_state["record"]["qaoa"]["p"] == 1
     assert at.session_state["record"]["budget_W"] == 22000
+
+
+def test_headline_for_cached_frame(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    record = frames[0]
+    exact = record["metrics_exact"]
+
+    cards = headline(record)
+
+    assert [card["label"] for card in cards] == [
+        "V_DP",
+        "AR Greedy",
+        "AR QAOA (top-1)",
+        "Optimum amplification",
+    ]
+    assert cards[0]["value"] == f"{record['dp']['value']:.3f}"
+    assert cards[1]["value"] == f"{record['ar_greedy']:.3f}"
+    assert cards[2]["value"] == f"{exact['ar_top1']:.3f}"
+    assert cards[2]["delta"] == f"{exact['ar_top1'] - record['ar_greedy']:+.3f} vs Greedy"
+    assert cards[3]["value"] == f"{exact['amplification']:.2f}×"
+    assert "exact distribution" in cards[2]["help"]
+
+
+def test_headline_uses_counts_without_exact_metrics(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    record = frames[1] | {"metrics_exact": None}
+
+    cards = headline(record)
+
+    assert cards[2]["value"] == f"{record['metrics']['ar_top1']:.3f}"
+    assert cards[3]["value"] == f"{record['metrics']['amplification']:.2f}×"
+    assert "sampled counts" in cards[3]["help"]
+
+
+def test_headline_marks_greedy_loss() -> None:
+    record = {
+        "ar_greedy": 0.861,
+        "dp": {"value": 1.147},
+        "metrics": None,
+        "metrics_exact": None,
+    }
+
+    cards = headline(record)
+
+    assert cards[1]["delta"] == "-0.139 vs DP"
+    assert [card["value"] for card in cards[2:]] == ["—", "—"]
+
+
+def test_headline_without_qaoa(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+
+    record = classical_record(frames[0], 22000)
+
+    cards = headline(record)
+
+    assert cards[0]["value"] == f"{record['dp']['value']:.3f}"
+    assert cards[1]["value"] == f"{record['ar_greedy']:.3f}"
+    assert [card["value"] for card in cards[2:]] == ["—", "—"]
+
+
+def test_app_metric_row(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, frames = mini
+    at = app(out, monkeypatch)
+
+    labels = [metric.label for metric in at.metric]
+    values = [metric.value for metric in at.metric]
+
+    assert labels == ["V_DP", "AR Greedy", "AR QAOA (top-1)", "Optimum amplification"]
+    assert values == [card["value"] for card in headline(frames[0])]
+
+    at.sidebar.slider[1].set_value(22000).run()
+
+    assert [metric.value for metric in at.metric][2:] == ["—", "—"]
