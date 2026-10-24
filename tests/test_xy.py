@@ -1,4 +1,8 @@
+import os
+import subprocess
+import sys
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -11,8 +15,10 @@ from lodq import qaoa as qaoa_module
 from lodq import qubo as qubo_module
 from lodq.classical import dp_solve
 from lodq.ising import qubo_to_ising
-from lodq.metrics import Problem
+from lodq.metrics import Problem, problem_from_scene
 from lodq.qubo import Qubo, bits_from_bitstring, build_qubo, decode
+from lodq.scene import Camera, Scene, SceneObject, save_scene
+from lodq.storage import load_runs
 
 
 def test_w_state_has_uniform_one_hot_probabilities() -> None:
@@ -338,3 +344,114 @@ def test_calibrate_penalty_B_onehot_reports_failure() -> None:
     solution = replace(dp_solve(v, dw, 1), choice=(0,))
     with pytest.raises(RuntimeError):
         qubo_module.calibrate_penalty_B_onehot(v, dw, 1, solution)
+
+
+@pytest.mark.parametrize("seed", [0, 17, 123])
+@pytest.mark.parametrize("n_layers", [0, 1, 2, 4, 10, 25])
+def test_random_xy_layers_preserve_w_state_one_hot(seed: int, n_layers: int) -> None:
+    circuit = qaoa_module.w_state_circuit(2, 3, 0)
+    rng = np.random.default_rng(seed)
+    for beta in rng.uniform(-np.pi, np.pi, size=n_layers):
+        qaoa_module.xy_mixer_layer(circuit, float(beta), 2, 3, 0)
+    probabilities = Statevector.from_instruction(circuit).probabilities()
+    allowed = np.zeros(64, dtype=bool)
+    allowed[[9, 10, 12, 17, 18, 20, 33, 34, 36]] = True
+    assert probabilities[~allowed].sum() < 1e-10
+    assert probabilities.sum() == pytest.approx(1.0, abs=1e-10)
+
+
+def test_compare_mixers_cli_saves_evaluated_sweeps(tmp_path: Path) -> None:
+    scene = Scene(
+        name="tiny",
+        objects=(
+            SceneObject("near", (0.0, 0.0, 0.0), 1.0, (300, 200, 100)),
+            SceneObject("far", (0.0, 0.0, 2.0), 1.0, (300, 200, 100)),
+        ),
+        camera=Camera((0.0, 0.0, -5.0)),
+        budget_W=300,
+        block_size=100,
+    )
+    scene_path = tmp_path / "tiny.yaml"
+    save_scene(scene, scene_path)
+    root = tmp_path / "runs"
+    repo = Path(__file__).resolve().parents[1]
+    process = subprocess.run(
+        [
+            sys.executable,
+            str(repo / "scripts" / "compare_mixers.py"),
+            "--scene",
+            str(scene_path),
+            "--seeds",
+            "0",
+            "17",
+            "--p",
+            "1",
+            "2",
+            "--n-starts",
+            "1",
+            "--maxiter",
+            "12",
+            "--shots",
+            "64",
+            "--backend",
+            "statevector",
+            "--root",
+            str(root),
+        ],
+        cwd=repo,
+        env=os.environ | {"PYTHONPATH": str(repo / "src")},
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert process.returncode == 0, process.stdout + process.stderr
+    runs = load_runs(root)
+    assert len(runs) == 8
+    assert {run["tag"] for run in runs} == {
+        f"tiny__{mixer}__s{seed}__p{p}" for mixer in ("x", "xy") for seed in (0, 17) for p in (1, 2)
+    }
+    problem = problem_from_scene(scene)
+    dp = dp_solve(problem.v, problem.dw, problem.dW)
+    expected_B, _ = qubo_module.calibrate_penalty_B_onehot(problem.v, problem.dw, problem.dW, dp)
+    for run in runs:
+        result = run["qaoa"]
+        metrics = run["metrics"]
+        assert metrics["shots"] == sum(result["counts"].values()) == 64
+        assert run["dp"]["value"] == pytest.approx(dp.value)
+        if result["mixer"] == "xy":
+            assert run["penalties"]["A"] == 0.0
+            assert run["penalties"]["B"] == pytest.approx(expected_B)
+            assert metrics["p_onehot"] == pytest.approx(1.0)
+        onehot = feasible = 0
+        best_value = 0.0
+        for bitstring, count in result["counts"].items():
+            blocks = np.array([int(bit) for bit in bitstring[::-1]][:6]).reshape(2, 3)
+            if not np.all(blocks.sum(axis=1) == 1):
+                continue
+            onehot += count
+            levels = blocks.argmax(axis=1)
+            if problem.dw[np.arange(2), levels].sum() <= problem.dW:
+                feasible += count
+                best_value = max(best_value, float(problem.v[np.arange(2), levels].sum()))
+        assert metrics["p_onehot"] == pytest.approx(onehot / 64)
+        assert metrics["p_feas"] == pytest.approx(feasible / 64)
+        assert metrics["ar_best"] == pytest.approx(best_value / dp.value)
+    summary = process.stdout.split("Mean over seeds")[-1]
+    assert "p_onehot" in summary and "p_feas" in summary and "ar_best" in summary
+    for p in (1, 2):
+        for mixer in ("x", "xy"):
+            rows = [
+                run["metrics"]
+                for run in runs
+                if run["qaoa"]["p"] == p and run["qaoa"]["mixer"] == mixer
+            ]
+            line = next(
+                line for line in summary.splitlines() if line.split()[:2] == [str(p), mixer]
+            )
+            expected = [
+                np.mean([row[key] for row in rows]) for key in ("p_onehot", "p_feas", "ar_best")
+            ]
+            np.testing.assert_allclose(
+                [float(value) for value in line.split()[2:]], expected, atol=5e-5, rtol=0
+            )
