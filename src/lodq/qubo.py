@@ -210,3 +210,45 @@ def verify_qubo(
         gap_to_infeasible=gap_to_infeasible,
         gap_to_second_feasible=gap_to_second_feasible,
     )
+
+
+def default_penalties(v: np.ndarray) -> tuple[float, float]:
+    """Нарушение бюджета на 1 блок штрафуется лишь на B, поэтому B должен
+    превышать наибольший выигрыш одного апгрейда относительно самого грубого LOD.
+    Правило B ≈ 1.2·max(Δv/Δw) небезопасно. Штрафы проверяются полным перебором.
+    """
+    utility = np.asarray(v, dtype=np.float64)
+    A = float(1.5 * utility.max())
+    B = float(1.2 * np.max(utility - utility[:, -1:]))
+    return A, B
+
+
+def calibrate_penalties(
+    v: np.ndarray,
+    dw: np.ndarray,
+    dW: int,
+    dp_solution: Solution,
+    scales: tuple[float, ...] = (1.0, 0.8, 0.6, 0.5, 0.4, 0.3),
+    verbose: bool = False,
+) -> tuple[float, float, VerifyReport]:
+    A0, B0 = default_penalties(v)
+    best: tuple[float, float, VerifyReport] | None = None
+    rows = ["sA sB ok gap_to_infeasible gap_to_second_feasible"]
+    for sA in scales:
+        for sB in scales:
+            A, B = float(sA * A0), float(sB * B0)
+            qubo = build_qubo(v, dw, dW, A, B)
+            report = verify_qubo(qubo, v, dw, dp_solution)
+            rows.append(
+                f"{sA:g} {sB:g} {report.ok} "
+                f"{report.gap_to_infeasible:.9g} {report.gap_to_second_feasible:.9g}"
+            )
+            if report.ok and (best is None or A + B < best[0] + best[1]):
+                best = (A, B, report)
+
+    table = "\n".join(rows)
+    if verbose:
+        print(table)
+    if best is None:
+        raise RuntimeError(f"Не удалось подобрать штрафы:\n{table}")
+    return best

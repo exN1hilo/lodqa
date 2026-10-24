@@ -242,3 +242,82 @@ def test_verify_qubo_trap_matches_dp(trap: Problem) -> None:
     assert report.ground_energy == pytest.approx(-solution.value, abs=1e-9, rel=0)
     assert report.n_degenerate == 1
     assert report.gap_to_infeasible >= 0.02
+
+
+@pytest.mark.parametrize(
+    "v, expected",
+    [
+        (np.array([[4.0, 3.0, 1.0], [10.0, 9.0, 8.0]]), (15.0, 3.6)),
+        (np.array([[0.5, 0.5], [1.0, 1.0]]), (1.5, 0.0)),
+    ],
+)
+def test_default_penalties_uses_each_objects_lowest_lod(
+    v: np.ndarray, expected: tuple[float, float]
+) -> None:
+    actual = qubo_module.default_penalties(v)
+    assert actual == pytest.approx(expected)
+    assert all(isinstance(value, float) for value in actual)
+
+
+def test_default_penalties_trap(trap: Problem) -> None:
+    assert qubo_module.default_penalties(trap.v) == pytest.approx((1.5, 1.02))
+
+
+@pytest.fixture
+def calibration_problem() -> tuple[np.ndarray, np.ndarray, Solution]:
+    v = np.array([[1.0, 0.1], [0.8, 0.1]])
+    dw = np.array([[1, 0], [1, 0]])
+    return v, dw, dp_solve(v, dw, 1)
+
+
+def test_calibration_selects_minimum_sum_with_independent_scales(
+    calibration_problem: tuple[np.ndarray, np.ndarray, Solution],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    v, dw, solution = calibration_problem
+    A, B, report = qubo_module.calibrate_penalties(v, dw, 1, solution)
+    assert (A, B) == pytest.approx((0.45, 0.864))
+    assert report.ok is True
+    assert report.ground_choice == (0, 1)
+    assert report.ground_energy == pytest.approx(-1.1)
+    assert report.gap_to_infeasible == pytest.approx(0.164)
+    assert capsys.readouterr().out == ""
+
+
+def test_calibration_respects_custom_unsorted_scales(
+    calibration_problem: tuple[np.ndarray, np.ndarray, Solution],
+) -> None:
+    v, dw, solution = calibration_problem
+    A, B, report = qubo_module.calibrate_penalties(v, dw, 1, solution, scales=(0.6, 1.0, 0.8))
+    assert (A, B) == pytest.approx((0.9, 0.864))
+    assert report.ok is True
+
+
+def test_calibration_prints_all_36_reports_when_verbose(
+    calibration_problem: tuple[np.ndarray, np.ndarray, Solution],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    v, dw, solution = calibration_problem
+    qubo_module.calibrate_penalties(v, dw, 1, solution, verbose=True)
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[0].split() == ["sA", "sB", "ok", "gap_to_infeasible", "gap_to_second_feasible"]
+    rows = [line.split() for line in lines[1:]]
+    assert len(rows) == 36
+    assert len({(float(row[0]), float(row[1])) for row in rows}) == 36
+    assert {row[2] for row in rows} == {"True", "False"}
+    assert all(len(row) == 5 for row in rows)
+
+
+def test_calibration_failure_includes_all_failed_reports(
+    calibration_problem: tuple[np.ndarray, np.ndarray, Solution],
+) -> None:
+    v, dw, solution = calibration_problem
+    with pytest.raises(RuntimeError) as error:
+        qubo_module.calibrate_penalties(v, dw, 1, solution, scales=(0.05, 0.1))
+    lines = str(error.value).splitlines()
+    header = next(i for i, line in enumerate(lines) if line.split()[0] == "sA")
+    rows = [line.split() for line in lines[header + 1 :]]
+    assert len(rows) == 4
+    assert all(row[2] == "False" for row in rows)
+    assert "gap_to_infeasible" in lines[header]
+    assert "gap_to_second_feasible" in lines[header]
