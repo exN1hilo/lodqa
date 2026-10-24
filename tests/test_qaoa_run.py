@@ -1,5 +1,9 @@
+import os
+import subprocess
+import sys
 import warnings
 from dataclasses import FrozenInstanceError, asdict
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -25,14 +29,19 @@ from lodq.qaoa import (
     make_sampler,
     measure_for_aer,
     normalize_operator,
+    qaoa_tag,
     random_init,
     run_qaoa,
+    run_qaoa_sweep,
     run_sampler,
+    save_qaoa_run,
     toy_problem,
     transpile_for_aer,
 )
 from lodq.qubo import Qubo, bits_from_bitstring, build_qubo, decode, energy, is_feasible
-from lodq.storage import load_runs, save_run
+from lodq.storage import load_runs, run_exists, save_run
+
+REPO = Path(__file__).resolve().parents[1]
 
 
 def make_toy_qubo() -> Qubo:
@@ -54,6 +63,11 @@ def toy_qubo() -> Qubo:
 @pytest.fixture(scope="module")
 def toy_result(toy_qubo: Qubo) -> QAOAResult:
     return run_qaoa(toy_qubo, p=1, seed=0, maxiter=60)
+
+
+@pytest.fixture(scope="module")
+def toy_sweep(toy_qubo: Qubo) -> list[QAOAResult]:
+    return run_qaoa_sweep(toy_qubo, [1, 2, 3, 4], seed=0, n_starts=1, maxiter=100)
 
 
 @pytest.fixture(scope="module")
@@ -546,3 +560,102 @@ def test_run_qaoa_energy_objective_fields(toy_result: QAOAResult) -> None:
 def test_run_qaoa_rejects_unknown_objective(toy_qubo: Qubo) -> None:
     with pytest.raises(ValueError, match="objective"):
         run_qaoa(toy_qubo, p=1, seed=0, objective="max")
+
+
+def test_run_qaoa_sweep_runs_every_depth(toy_sweep: list[QAOAResult]) -> None:
+    assert [result.p for result in toy_sweep] == [1, 2, 3, 4]
+    assert all(result.gammas.shape == (result.p,) for result in toy_sweep)
+    assert all(result.seed == 0 for result in toy_sweep)
+
+
+def test_run_qaoa_sweep_warm_starts_from_interp(
+    toy_qubo: Qubo, toy_sweep: list[QAOAResult]
+) -> None:
+    op, const = qubo_to_ising(toy_qubo)
+    cost_op = normalize_operator(op)[0]
+
+    for prev, result in pairwise(toy_sweep):
+        gammas, betas = interp_init(prev.gammas, prev.betas)
+        circuit = build_qaoa_circuit(cost_op, result.p)
+        expected = exact_expectation(circuit, op, gammas, betas) + const
+        assert result.energy_history[0] == pytest.approx(expected, abs=1e-9)
+
+
+def test_run_qaoa_sweep_improves_with_depth(toy_sweep: list[QAOAResult]) -> None:
+    energies = [result.best_expectation for result in toy_sweep]
+    optimum_counts = [result.counts.get("001001", 0) for result in toy_sweep]
+
+    assert energies[-1] < energies[0]
+    assert optimum_counts[-1] > optimum_counts[0]
+
+
+def test_run_qaoa_sweep_interpolates_over_gaps(toy_qubo: Qubo) -> None:
+    first, third = run_qaoa_sweep(toy_qubo, [1, 3], seed=0, n_starts=1, maxiter=20)
+    op, const = qubo_to_ising(toy_qubo)
+    gammas, betas = interp_init(*interp_init(first.gammas, first.betas))
+    circuit = build_qaoa_circuit(normalize_operator(op)[0], 3)
+
+    expected = exact_expectation(circuit, op, gammas, betas) + const
+
+    assert third.p == 3
+    assert third.energy_history[0] == pytest.approx(expected, abs=1e-9)
+
+
+@pytest.mark.parametrize("p_list", [[], [0, 1], [2, 1], [1, 1, 2]])
+def test_run_qaoa_sweep_rejects_bad_p_list(toy_qubo: Qubo, p_list: list[int]) -> None:
+    with pytest.raises(ValueError, match="p_list"):
+        run_qaoa_sweep(toy_qubo, p_list, seed=0)
+
+
+def test_qaoa_tag_format(toy_result: QAOAResult) -> None:
+    assert qaoa_tag("greedy_trap_1", toy_result) == "greedy_trap_1__x__s0__p1"
+
+
+def test_save_qaoa_run_writes_angles_and_counts(
+    toy_sweep: list[QAOAResult], tmp_path: Path
+) -> None:
+    paths = [
+        save_qaoa_run(result, "toy", root=tmp_path, extra={"penalties": {"A": 1.5}})
+        for result in toy_sweep
+    ]
+
+    runs = {run["tag"]: run for run in load_runs(tmp_path, tag_prefix="toy__")}
+
+    assert len(paths) == len(runs) == 4
+    assert all(run_exists(tmp_path, f"toy__x__s0__p{p}") for p in (1, 2, 3, 4))
+    for result in toy_sweep:
+        run = runs[f"toy__x__s0__p{result.p}"]
+        assert run["scene"] == "toy"
+        assert run["penalties"] == {"A": 1.5}
+        assert run["qaoa"]["gammas"] == pytest.approx(result.gammas.tolist())
+        assert run["qaoa"]["betas"] == pytest.approx(result.betas.tolist())
+        assert run["qaoa"]["energy_history"] == result.energy_history
+        assert run["qaoa"]["counts"] == result.counts
+        assert run["qaoa"]["objective"] == "energy"
+
+
+def test_qaoa_sweep_script_saves_runs(tmp_path: Path) -> None:
+    command = [
+        sys.executable,
+        "scripts/qaoa_sweep.py",
+        "--p",
+        "1",
+        "2",
+        "--n-starts",
+        "1",
+        "--maxiter",
+        "3",
+        "--shots",
+        "128",
+        "--root",
+        str(tmp_path),
+    ]
+    env = os.environ | {"PYTHONPATH": str(REPO / "src")}
+
+    out = subprocess.run(command, cwd=REPO, env=env, capture_output=True, text=True, check=True)
+
+    assert "scene default: 19 qubits" in out.stdout
+    runs = load_runs(tmp_path, tag_prefix="default__x__s0__")
+    assert sorted(run["qaoa"]["p"] for run in runs) == [1, 2]
+    assert all(sum(run["qaoa"]["counts"].values()) == 128 for run in runs)
+    assert all(run["dp"]["used"] <= run["problem"]["dW"] for run in runs)

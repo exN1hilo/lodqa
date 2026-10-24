@@ -1,7 +1,10 @@
 import re
 import time
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from itertools import pairwise
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 from qiskit import QuantumCircuit
@@ -22,6 +25,7 @@ from scipy.optimize import minimize
 
 from lodq.ising import qubo_to_ising
 from lodq.qubo import Qubo, bits_from_bitstring, energy
+from lodq.storage import save_run
 
 PARAM_RE = re.compile(r"(?P<kind>[γβ])\[(?P<index>\d+)\]")
 SLOW_EVAL_S = 0.5
@@ -431,6 +435,35 @@ def run_qaoa(
         objective=objective,
         cvar_alpha=cvar_alpha if objective == "cvar" else None,
     )
+
+
+def run_qaoa_sweep(qubo: Qubo, p_list: list[int], seed: int, **kw: Any) -> list[QAOAResult]:
+    if not p_list or p_list[0] < 1 or any(b <= a for a, b in pairwise(p_list)):
+        raise ValueError(f"p_list must be strictly increasing and start at >= 1, got {p_list}")
+    results: list[QAOAResult] = []
+    warm_start = None
+    for p in p_list:
+        if results:
+            gammas, betas = results[-1].gammas, results[-1].betas
+            while gammas.size < p:
+                gammas, betas = interp_init(gammas, betas)
+            warm_start = (gammas, betas)
+        results.append(run_qaoa(qubo, p, seed, warm_start=warm_start, **kw))
+    return results
+
+
+def qaoa_tag(name: str, result: QAOAResult) -> str:
+    return f"{name}__{result.mixer}__s{result.seed}__p{result.p}"
+
+
+def save_qaoa_run(
+    result: QAOAResult,
+    name: str,
+    root: str | Path = "runs",
+    extra: dict[str, Any] | None = None,
+) -> Path:
+    run = {"scene": name, **(extra or {}), "qaoa": asdict(result)}
+    return save_run(run, qaoa_tag(name, result), root=root)
 
 
 def toy_problem() -> tuple[np.ndarray, np.ndarray, int]:
