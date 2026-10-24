@@ -29,6 +29,7 @@ from lodq.qaoa import (
 )
 from lodq.qubo import (
     Qubo,
+    all_energies,
     build_qubo,
     cache_energies,
     calibrate_penalties,
@@ -143,7 +144,9 @@ def _save_result(
     metrics = evaluate_counts(result.counts, qubo, problem.v, problem.dw, prep["dp"], baseline)
     metrics_exact = None
     if cfg.backend == "fastsim":
-        distribution = probabilities(qaoa_state(qubo, result.gammas, result.betas))
+        energies = prep["energies"] if qubo is prep["qubo"] else all_energies(qubo)
+        state = qaoa_state(energies / result.scale, result.gammas, result.betas, qubo.n)
+        distribution = probabilities(state)
         metrics_exact = evaluate_probabilities(
             distribution, qubo, problem.v, problem.dw, prep["dp"], baseline
         ).to_dict()
