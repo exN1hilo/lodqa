@@ -34,3 +34,6 @@ target-version = "py312"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "slow: полный перебор и калибровка случайных сцен",
+]
