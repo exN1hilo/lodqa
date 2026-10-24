@@ -8,8 +8,8 @@ from typing import Any
 
 import numpy as np
 from qiskit import QuantumCircuit
-from qiskit.circuit import CircuitInstruction, Parameter
-from qiskit.circuit.library import StatePreparation, qaoa_ansatz
+from qiskit.circuit import CircuitInstruction, Parameter, ParameterExpression
+from qiskit.circuit.library import StatePreparation, XXPlusYYGate, qaoa_ansatz
 from qiskit.primitives import (
     BaseEstimatorV2,
     BaseSamplerV2,
@@ -485,3 +485,27 @@ def w_state_circuit(n_objects: int, n_lods: int, n_slack: int) -> QuantumCircuit
     if n_slack:
         circuit.h(range(n_objects * n_lods, n))
     return circuit
+
+
+def xy_mixer_layer(
+    circuit: QuantumCircuit,
+    beta: float | ParameterExpression,
+    n_objects: int,
+    n_lods: int,
+    n_slack: int,
+) -> None:
+    if n_objects < 0 or n_lods < 1 or n_slack < 0:
+        raise ValueError("n_objects и n_slack должны быть >= 0, n_lods должен быть >= 1")
+    n = n_objects * n_lods + n_slack
+    if circuit.num_qubits < n:
+        raise ValueError(f"В схеме должно быть не меньше {n} кубитов")
+
+    pairs = list(pairwise(range(n_lods)))
+    if n_lods > 2:
+        pairs.append((n_lods - 1, 0))
+    for i in range(n_objects):
+        offset = i * n_lods
+        for j, k in pairs:
+            circuit.append(XXPlusYYGate(theta=2 * beta), [offset + j, offset + k])
+    if n_slack:
+        circuit.rx(2 * beta, range(n_objects * n_lods, n))
