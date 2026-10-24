@@ -15,8 +15,8 @@ END = "<!-- RESULTS:END -->"
 COLUMNS = (
     ("ar_top1", "AR top-1"),
     ("p_feas", "P_feas"),
-    ("budget_util_best", "Использование бюджета"),
-    ("amplification", "Усиление P_opt"),
+    ("budget_util_best", "Budget use"),
+    ("amplification", "P_opt gain"),
 )
 MIXERS = (("x", "QAOA-X"), ("xy", "QAOA-XY"))
 
@@ -96,7 +96,7 @@ def qaoa_rows(summary: pd.DataFrame, scene: str) -> list[Row]:
 
 
 def markdown_table(rows: list[Row]) -> str:
-    header = ["Метод", *(title for _, title in COLUMNS)]
+    header = ["Method", *(title for _, title in COLUMNS)]
     lines = [
         "| " + " | ".join(header) + " |",
         "|" + "|".join(["---", *("---:" for _ in COLUMNS)]) + "|",
@@ -107,13 +107,13 @@ def markdown_table(rows: list[Row]) -> str:
 
 
 def write_readme(path: Path, table: str, scene: str) -> None:
-    block = f"{START}\n\nСцена `{scene}`, mean ± std по запускам.\n\n{table}\n\n{END}"
+    block = f"{START}\n\nScene `{scene}`, mean ± std over runs.\n\n{table}\n\n{END}"
     text = path.read_text(encoding="utf-8")
     pattern = re.compile(re.escape(START) + r".*?" + re.escape(END), re.DOTALL)
     if pattern.search(text):
         text = pattern.sub(lambda _: block, text, count=1)
     else:
-        text = text.rstrip("\n") + f"\n\n## Результаты\n\n{block}\n"
+        text = text.rstrip("\n") + f"\n\n## Results\n\n{block}\n"
     path.write_text(text, encoding="utf-8")
 
 
