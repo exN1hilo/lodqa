@@ -3,11 +3,13 @@
 import json
 import re
 import subprocess
+from collections.abc import Collection
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 ARRAY_SUFFIX = "_array"
 TAG_RE = re.compile(r"[A-Za-z0-9._-]+")
@@ -119,3 +121,19 @@ def load_runs(root: str | Path = "runs", tag_prefix: str | None = None) -> list[
 
 def run_exists(root: str | Path, tag: str) -> bool:
     return any(found == tag for found, _ in _run_dirs(root))
+
+
+def _flatten(data: dict, keep: Collection[str], prefix: str = "") -> dict[str, Any]:
+    flat: dict[str, Any] = {}
+    for key, value in data.items():
+        name = f"{prefix}{key}"
+        if isinstance(value, dict) and key not in keep:
+            flat |= _flatten(value, keep, f"{name}.")
+        else:
+            flat[name] = value
+    return flat
+
+
+def runs_to_dataframe(runs: list[dict], keep: Collection[str] = ("counts",)) -> pd.DataFrame:
+    """Одна строка на прогон; вложенные dict → колонки через точку, кроме ключей из keep."""
+    return pd.DataFrame([_flatten(run, keep) for run in runs])
