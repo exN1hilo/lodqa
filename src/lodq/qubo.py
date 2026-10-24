@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
+from lodq.classical import Solution
 from lodq.metrics import n_slack
 
 
@@ -144,3 +145,68 @@ def energies_cache_path(name: str, qubo: Qubo) -> Path:
     digest = sha1(qubo.Q.tobytes(), usedforsecurity=False)
     digest.update(np.float64(qubo.offset).tobytes())
     return Path("cache") / f"{name}_{digest.hexdigest()[:10]}.npy"
+
+
+@dataclass
+class VerifyReport:
+    ok: bool
+    ground_index: int
+    ground_choice: tuple[int, ...] | None
+    ground_feasible: bool
+    ground_energy: float
+    n_degenerate: int
+    gap_to_infeasible: float
+    gap_to_second_feasible: float
+
+
+def verify_qubo(
+    qubo: Qubo,
+    v: np.ndarray,
+    dw: np.ndarray,
+    dp_solution: Solution,
+    delta: float = 0.02,
+    energies: np.ndarray | None = None,
+) -> VerifyReport:
+    if np.shape(v) != (qubo.N, qubo.M) or np.shape(dw) != (qubo.N, qubo.M):
+        raise ValueError("v и dw должны иметь форму (N, M), соответствующую QUBO")
+    values = np.asarray(all_energies(qubo) if energies is None else energies, dtype=np.float64)
+    total = 1 << qubo.n
+    if values.shape != (total,):
+        raise ValueError(f"energies должен быть одномерным массивом длины {total}")
+
+    indices = np.arange(total, dtype=np.int64)
+    bits = ((indices[:, None] >> np.arange(qubo.n)) & 1).astype(np.int8)
+    blocks = bits[:, : qubo.N * qubo.M].reshape(total, qubo.N, qubo.M)
+    one_hot = np.all(blocks.sum(axis=2) == 1, axis=1)
+    used = np.einsum("bij,ij->b", blocks, np.asarray(dw))
+    feasible = one_hot & (used <= qubo.dW)
+
+    ground_index = int(np.argmin(values))
+    ground_energy = float(values[ground_index])
+    ground_choice = decode(bits[ground_index], qubo)
+    ground_feasible = bool(feasible[ground_index])
+    n_degenerate = int(np.count_nonzero(np.abs(values - ground_energy) <= 1e-9))
+    gap_to_infeasible = float(np.min(values[~feasible], initial=np.inf) - ground_energy)
+
+    other_feasible = feasible.copy()
+    if ground_choice is not None:
+        levels = np.asarray(ground_choice, dtype=np.intp)
+        same_choice = np.all(blocks[:, np.arange(qubo.N), levels] == 1, axis=1)
+        other_feasible &= ~same_choice
+    gap_to_second_feasible = float(np.min(values[other_feasible], initial=np.inf) - ground_energy)
+    ok = (
+        ground_feasible
+        and ground_choice == dp_solution.choice
+        and n_degenerate == 1
+        and gap_to_infeasible >= delta
+    )
+    return VerifyReport(
+        ok=ok,
+        ground_index=ground_index,
+        ground_choice=ground_choice,
+        ground_feasible=ground_feasible,
+        ground_energy=ground_energy,
+        n_degenerate=n_degenerate,
+        gap_to_infeasible=gap_to_infeasible,
+        gap_to_second_feasible=gap_to_second_feasible,
+    )

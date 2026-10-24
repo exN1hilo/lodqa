@@ -5,9 +5,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from lodq import qubo as qubo_module
+from lodq.classical import Solution, dp_solve
 from lodq.metrics import Problem
 from lodq.qubo import (
     Qubo,
+    VerifyReport,
     all_energies,
     build_qubo,
     cache_energies,
@@ -15,6 +18,7 @@ from lodq.qubo import (
     energies_cache_path,
     energy,
     load_energies,
+    verify_qubo,
 )
 
 
@@ -103,3 +107,138 @@ def test_energies_cache_path_changes_with_penalties(trap: Problem) -> None:
         for A, B in [(1.5, 1.02), (2.0, 1.02), (1.5, 1.5)]
     }
     assert len(paths) == 3
+
+
+@pytest.fixture
+def verification_problem() -> tuple[np.ndarray, np.ndarray, Qubo, Solution]:
+    v = np.array([[1.0, 0.2]])
+    dw = np.array([[1, 0]])
+    qubo = build_qubo(v, dw, 1, A=2.0, B=0.1)
+    return v, dw, qubo, dp_solve(v, dw, 1)
+
+
+def test_verify_qubo_reports_known_gaps_and_ignores_other_slack_states(
+    verification_problem: tuple[np.ndarray, np.ndarray, Qubo, Solution],
+) -> None:
+    v, dw, qubo, solution = verification_problem
+    report = verify_qubo(qubo, v, dw, solution)
+    assert isinstance(report, VerifyReport)
+    assert report.ok is True
+    assert report.ground_index == 1
+    assert report.ground_choice == (0,)
+    assert report.ground_feasible is True
+    assert report.ground_energy == pytest.approx(-1.0)
+    assert report.n_degenerate == 1
+    assert report.gap_to_infeasible == pytest.approx(1.8)
+    assert report.gap_to_second_feasible == pytest.approx(0.8)
+
+
+def test_verify_qubo_uses_supplied_energies(
+    verification_problem: tuple[np.ndarray, np.ndarray, Qubo, Solution],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    v, dw, qubo, solution = verification_problem
+    energies = all_energies(qubo)
+    before = energies.copy()
+    expected = verify_qubo(qubo, v, dw, solution, energies=energies)
+
+    def fail_if_recomputed(qubo: Qubo) -> np.ndarray:
+        pytest.fail("Переданные энергии не должны вычисляться повторно")
+
+    monkeypatch.setattr(qubo_module, "all_energies", fail_if_recomputed)
+    assert verify_qubo(qubo, v, dw, solution, energies=energies) == expected
+    np.testing.assert_array_equal(energies, before)
+
+
+def test_verify_qubo_rejects_invalid_one_hot_ground() -> None:
+    v = np.array([[1.0, 0.2]])
+    dw = np.array([[1, 0]])
+    qubo = build_qubo(v, dw, 1, A=0.1, B=0.1)
+    report = verify_qubo(qubo, v, dw, dp_solve(v, dw, 1))
+    assert report.ok is False
+    assert report.ground_index == 3
+    assert report.ground_choice is None
+    assert report.ground_feasible is False
+    assert report.gap_to_infeasible == pytest.approx(0.0)
+    assert report.gap_to_second_feasible == pytest.approx(0.1)
+
+
+def test_verify_qubo_rejects_over_budget_ground() -> None:
+    v = np.array([[1.0, 0.2]])
+    dw = np.array([[2, 0]])
+    qubo = build_qubo(v, dw, 1, A=2.0, B=0.1)
+    report = verify_qubo(qubo, v, dw, dp_solve(v, dw, 1))
+    assert report.ok is False
+    assert report.ground_choice == (0,)
+    assert report.ground_feasible is False
+    assert report.gap_to_infeasible == pytest.approx(0.0)
+
+
+def test_verify_qubo_rejects_dp_choice_mismatch(
+    verification_problem: tuple[np.ndarray, np.ndarray, Qubo, Solution],
+) -> None:
+    v, dw, qubo, solution = verification_problem
+    report = verify_qubo(qubo, v, dw, replace(solution, choice=(1,)))
+    assert report.ground_feasible is True
+    assert report.n_degenerate == 1
+    assert report.ok is False
+
+
+@pytest.mark.parametrize("difference, expected_count", [(0.0, 2), (5e-10, 2), (2e-9, 1)])
+def test_verify_qubo_degeneracy_uses_absolute_tolerance(
+    verification_problem: tuple[np.ndarray, np.ndarray, Qubo, Solution],
+    difference: float,
+    expected_count: int,
+) -> None:
+    v, dw, qubo, solution = verification_problem
+    energies = all_energies(qubo)
+    energies[6] = energies[1] + difference
+    report = verify_qubo(qubo, v, dw, solution, energies=energies)
+    assert report.n_degenerate == expected_count
+    assert report.ok is (expected_count == 1)
+
+
+@pytest.mark.parametrize("margin, expected_ok", [(0.0, True), (1e-6, False)])
+def test_verify_qubo_applies_gap_threshold(
+    verification_problem: tuple[np.ndarray, np.ndarray, Qubo, Solution],
+    margin: float,
+    expected_ok: bool,
+) -> None:
+    v, dw, qubo, solution = verification_problem
+    baseline = verify_qubo(qubo, v, dw, solution)
+    delta = baseline.gap_to_infeasible + margin
+    report = verify_qubo(qubo, v, dw, solution, delta=delta)
+    assert report.ok is expected_ok
+
+
+def test_verify_qubo_reports_infinite_gap_when_no_second_choice() -> None:
+    v = np.array([[1.0, 0.2]])
+    dw = np.array([[1, 0]])
+    qubo = build_qubo(v, dw, 0, A=2.0, B=3.0)
+    report = verify_qubo(qubo, v, dw, dp_solve(v, dw, 0))
+    assert report.ok is True
+    assert report.ground_choice == (1,)
+    assert report.gap_to_second_feasible == float("inf")
+
+
+def test_verify_qubo_reports_infinite_gap_when_no_infeasible_states() -> None:
+    v = np.empty((0, 2))
+    dw = np.empty((0, 2), dtype=np.int64)
+    qubo = build_qubo(v, dw, 0, A=2.0, B=3.0)
+    solution = Solution((), 0.0, 0, "dp")
+    report = verify_qubo(qubo, v, dw, solution)
+    assert report.ok is True
+    assert report.ground_choice == ()
+    assert report.gap_to_infeasible == float("inf")
+    assert report.gap_to_second_feasible == float("inf")
+
+
+def test_verify_qubo_trap_matches_dp(trap: Problem) -> None:
+    qubo = build_qubo(trap.v, trap.dw, trap.dW, A=1.5, B=1.02)
+    solution = dp_solve(trap.v, trap.dw, trap.dW)
+    report = verify_qubo(qubo, trap.v, trap.dw, solution)
+    assert report.ok is True
+    assert report.ground_choice == solution.choice == (2, 0, 0, 2, 2)
+    assert report.ground_energy == pytest.approx(-solution.value, abs=1e-9, rel=0)
+    assert report.n_degenerate == 1
+    assert report.gap_to_infeasible >= 0.02
