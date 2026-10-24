@@ -1,9 +1,12 @@
 import numpy as np
 import pytest
+from qiskit.quantum_info import SparsePauliOp
 
-from lodq.ising import qubo_to_ising
+from lodq.ising import ising_diagonal, qubo_to_ising
 from lodq.metrics import Problem
-from lodq.qubo import Qubo, build_qubo
+from lodq.qubo import Qubo, build_qubo, encode
+
+TWO_QUBIT_STATES = np.array([[0, 0], [1, 0], [0, 1], [1, 1]])
 
 
 def small_qubo(Q: list[list[float]], offset: float = 0.0) -> Qubo:
@@ -66,3 +69,66 @@ def test_trap_operator_structure(trap_qubo: Qubo) -> None:
         p, q = np.flatnonzero(mask)
         assert coef.real == pytest.approx(upper[p, q] / 4)
     assert const == pytest.approx(trap_qubo.offset + np.trace(trap_qubo.Q) / 2 + upper.sum() / 4)
+
+
+def test_diagonal_two_qubit_by_hand() -> None:
+    op, const = qubo_to_ising(small_qubo([[2.0, 3.0], [0.0, -1.0]], offset=0.5))
+
+    actual = ising_diagonal(op, const, TWO_QUBIT_STATES)
+
+    assert isinstance(actual, np.ndarray)
+    assert actual.dtype == np.float64
+    np.testing.assert_allclose(actual, [0.5, 2.5, -0.5, 4.5], atol=1e-12, rtol=0)
+
+
+def test_diagonal_single_state_returns_float(trap: Problem, trap_qubo: Qubo) -> None:
+    op, const = qubo_to_ising(trap_qubo)
+    bits = encode((2, 0, 0, 2, 2), trap_qubo, trap.dw)
+
+    actual = ising_diagonal(op, const, bits)
+
+    assert isinstance(actual, float)
+    assert actual == pytest.approx(-1.47, abs=1e-9, rel=0)
+    assert ising_diagonal(op, const, bits[None, :]).shape == (1,)
+
+
+def test_diagonal_of_zero_qubo_is_constant() -> None:
+    op, const = qubo_to_ising(small_qubo([[0.0, 0.0], [0.0, 0.0]], offset=3.0))
+
+    np.testing.assert_array_equal(ising_diagonal(op, const, TWO_QUBIT_STATES), [3.0] * 4)
+
+
+def test_diagonal_merges_duplicate_and_identity_terms() -> None:
+    op = SparsePauliOp.from_list([("IZ", 1.0), ("IZ", -3.0), ("ZZ", 0.5), ("II", 9.0)])
+
+    actual = ising_diagonal(op, 0.0, TWO_QUBIT_STATES)
+
+    np.testing.assert_allclose(actual, [7.5, 10.5, 6.5, 11.5], atol=1e-12, rtol=0)
+
+
+def test_diagonal_empty_batch(trap_qubo: Qubo) -> None:
+    op, const = qubo_to_ising(trap_qubo)
+
+    actual = ising_diagonal(op, const, np.empty((0, trap_qubo.n), dtype=np.int8))
+
+    assert isinstance(actual, np.ndarray)
+    assert actual.shape == (0,)
+
+
+@pytest.mark.parametrize(
+    ("op", "message"),
+    [
+        (SparsePauliOp.from_list([("XZ", 1.0)]), "только из I и Z"),
+        (SparsePauliOp.from_list([("ZZZ", 1.0)]), "Z и ZZ"),
+        (SparsePauliOp.from_list([("ZI", 1.0j)]), "вещественными"),
+    ],
+)
+def test_diagonal_rejects_non_ising_operators(op: SparsePauliOp, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        ising_diagonal(op, 0.0, np.zeros(op.num_qubits))
+
+
+def test_diagonal_rejects_wrong_bit_length(trap_qubo: Qubo) -> None:
+    op, const = qubo_to_ising(trap_qubo)
+    with pytest.raises(ValueError, match="bits"):
+        ising_diagonal(op, const, np.zeros((3, 18)))
