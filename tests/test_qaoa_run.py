@@ -14,18 +14,24 @@ from lodq.qaoa import (
     QAOAResult,
     assemble_values,
     build_qaoa_circuit,
+    cvar,
+    cvar_fn,
+    cvar_from_counts,
     expectation_fn,
     initial_points,
     interp_init,
     linear_ramp_init,
     make_estimator,
+    make_sampler,
+    measure_for_aer,
     normalize_operator,
     random_init,
     run_qaoa,
+    run_sampler,
     toy_problem,
     transpile_for_aer,
 )
-from lodq.qubo import Qubo, bits_from_bitstring, build_qubo, decode, is_feasible
+from lodq.qubo import Qubo, bits_from_bitstring, build_qubo, decode, energy, is_feasible
 from lodq.storage import load_runs, save_run
 
 
@@ -48,6 +54,11 @@ def toy_qubo() -> Qubo:
 @pytest.fixture(scope="module")
 def toy_result(toy_qubo: Qubo) -> QAOAResult:
     return run_qaoa(toy_qubo, p=1, seed=0, maxiter=60)
+
+
+@pytest.fixture(scope="module")
+def cvar_result(toy_qubo: Qubo) -> QAOAResult:
+    return run_qaoa(toy_qubo, p=1, seed=0, maxiter=60, objective="cvar", cvar_alpha=0.25)
 
 
 def make_result(**kw) -> QAOAResult:
@@ -422,3 +433,116 @@ def test_run_qaoa_serializes_with_save_run(toy_result: QAOAResult, tmp_path: Pat
     assert run["betas"] == pytest.approx(toy_result.betas.tolist())
     assert run["energy_history"] == toy_result.energy_history
     assert run["counts"] == toy_result.counts
+
+
+@pytest.mark.parametrize(
+    ("alpha", "expected"), [(1.0, 2.0), (0.5, 1.5), (0.25, 1.0), (0.1, 1.0), (0.75, 5 / 3)]
+)
+def test_cvar_by_hand(alpha: float, expected: float) -> None:
+    energies = np.array([3.0, 1.0, 2.0])
+    weights = np.array([1, 1, 2])
+
+    assert cvar(energies, weights, alpha) == pytest.approx(expected)
+
+
+def test_cvar_is_monotone_in_alpha() -> None:
+    rng = np.random.default_rng(0)
+    energies, weights = rng.normal(size=50), rng.integers(1, 20, size=50)
+
+    values = [cvar(energies, weights, alpha) for alpha in np.linspace(0.01, 1.0, 40)]
+
+    assert np.all(np.diff(values) >= -1e-12)
+    assert values[-1] == pytest.approx(np.average(energies, weights=weights))
+    assert values[0] >= energies.min()
+
+
+@pytest.mark.parametrize("alpha", [0.0, -0.1, 1.5])
+def test_cvar_rejects_bad_alpha(alpha: float) -> None:
+    with pytest.raises(ValueError, match="alpha"):
+        cvar(np.array([1.0]), np.array([1]), alpha)
+
+
+@pytest.mark.parametrize(
+    ("energies", "weights"), [([], []), ([1.0, 2.0], [1]), ([1.0], [0]), ([[1.0]], [[1]])]
+)
+def test_cvar_rejects_bad_samples(energies: list, weights: list) -> None:
+    with pytest.raises(ValueError, match="energies"):
+        cvar(np.array(energies), np.array(weights), 0.5)
+
+
+def test_cvar_from_counts_uses_qubo_energy(toy_qubo: Qubo) -> None:
+    counts = {"001001": 3, "101010": 1, "000101": 4}
+    bits = np.array([bits_from_bitstring(b, toy_qubo.n) for b in counts])
+    energies = energy(bits, toy_qubo)
+
+    assert energies[0] == pytest.approx(-1.2)
+    assert cvar_from_counts(counts, toy_qubo, 3 / 8) == pytest.approx(-1.2)
+    expected_mean = float(np.average(energies, weights=list(counts.values())))
+    assert cvar_from_counts(counts, toy_qubo, 1.0) == pytest.approx(expected_mean)
+
+
+def test_cvar_fn_matches_sampled_counts(toy_qubo: Qubo, toy_op: SparsePauliOp) -> None:
+    measured_t = measure_for_aer(build_qaoa_circuit(toy_op, 1), seed=0)
+    sampler = make_sampler("aer", seed=4)
+    fn = cvar_fn(measured_t, toy_qubo, sampler, alpha=0.2)
+    x = np.array([0.36, -0.36])
+
+    value = fn(x)
+
+    counts = run_sampler(measured_t, x[:1], x[1:], 1024, make_sampler("aer", seed=4))
+    assert sum(counts.values()) == 1024
+    assert value == pytest.approx(cvar_from_counts(counts, toy_qubo, 0.2))
+    assert fn(x) == value
+    assert fn.history == [value, value]
+    assert fn.n_evals == 2
+
+
+def test_cvar_fn_rejects_bad_input(toy_qubo: Qubo, toy_op: SparsePauliOp) -> None:
+    measured_t = measure_for_aer(build_qaoa_circuit(toy_op, 1), seed=0)
+    sampler = make_sampler("aer", seed=0)
+
+    with pytest.raises(ValueError, match="alpha"):
+        cvar_fn(measured_t, toy_qubo, sampler, alpha=0.0)
+    with pytest.raises(ValueError, match="shape"):
+        cvar_fn(measured_t, toy_qubo, sampler, alpha=0.5)(np.zeros(3))
+
+
+def test_run_qaoa_cvar_lowers_objective(cvar_result: QAOAResult) -> None:
+    history = cvar_result.energy_history
+
+    assert (cvar_result.objective, cvar_result.cvar_alpha) == ("cvar", 0.25)
+    assert min(history) < history[0]
+    assert min(history) < cvar_result.best_expectation
+
+
+def test_run_qaoa_cvar_best_expectation_is_exact_energy(
+    toy_qubo: Qubo, cvar_result: QAOAResult
+) -> None:
+    op, const = qubo_to_ising(toy_qubo)
+    circuit = build_qaoa_circuit(normalize_operator(op)[0], 1)
+
+    expected = exact_expectation(circuit, op, cvar_result.gammas, cvar_result.betas) + const
+
+    assert cvar_result.best_expectation == pytest.approx(expected, abs=1e-9)
+
+
+def test_run_qaoa_cvar_concentrates_on_optimum(
+    toy_qubo: Qubo, cvar_result: QAOAResult, toy_result: QAOAResult
+) -> None:
+    optimum = "001001"
+    bits = bits_from_bitstring(optimum, toy_qubo.n)
+    bitstring = max(cvar_result.counts, key=cvar_result.counts.get)
+
+    assert decode(bits, toy_qubo) == (0, 1)
+    assert energy(bits, toy_qubo) == pytest.approx(-1.2)
+    assert bitstring == optimum
+    assert cvar_result.counts[optimum] > toy_result.counts[optimum]
+
+
+def test_run_qaoa_energy_objective_fields(toy_result: QAOAResult) -> None:
+    assert (toy_result.objective, toy_result.cvar_alpha) == ("energy", None)
+
+
+def test_run_qaoa_rejects_unknown_objective(toy_qubo: Qubo) -> None:
+    with pytest.raises(ValueError, match="objective"):
+        run_qaoa(toy_qubo, p=1, seed=0, objective="max")

@@ -21,10 +21,12 @@ from qiskit_aer.primitives import SamplerV2 as AerSamplerV2
 from scipy.optimize import minimize
 
 from lodq.ising import qubo_to_ising
-from lodq.qubo import Qubo
+from lodq.qubo import Qubo, bits_from_bitstring, energy
 
 PARAM_RE = re.compile(r"(?P<kind>[γβ])\[(?P<index>\d+)\]")
 SLOW_EVAL_S = 0.5
+CVAR_SHOTS = 1024
+OBJECTIVES = ("energy", "cvar")
 
 
 @dataclass(frozen=True, eq=False)
@@ -41,6 +43,8 @@ class QAOAResult:
     wall_time_s: float
     counts: dict[str, int]
     backend: str
+    objective: str = "energy"
+    cvar_alpha: float | None = None
 
     def __post_init__(self) -> None:
         gammas = np.array(self.gammas, dtype=np.float64, copy=True)
@@ -171,29 +175,38 @@ class Expectation:
         self.p = len(split_params(self.circuit)[0])
 
     def __call__(self, x: np.ndarray) -> float:
-        angles = np.asarray(x, dtype=np.float64)
-        if angles.shape != (2 * self.p,):
-            raise ValueError(
-                f"x must have shape ({2 * self.p},) as [γ_1..γ_p, β_1..β_p], got {angles.shape}"
-            )
-        values = assemble_values(self.circuit, angles[: self.p], angles[self.p :])
+        gammas, betas = _split_angles(x, self.p)
+        values = assemble_values(self.circuit, gammas, betas)
         start = time.perf_counter()
         result = self.estimator.run([(self.circuit, self.cost_op, values)]).result()[0]
-        elapsed = time.perf_counter() - start
         value = float(result.data.evs)
-        if elapsed > self.slow_eval_s and not any(t > self.slow_eval_s for t in self.eval_times):
-            warnings.warn(
-                f"one ⟨H⟩ evaluation on {self.circuit.num_qubits} qubits took {elapsed:.2f} s, "
-                "consider backend='fastsim'",
-                stacklevel=2,
-            )
-        self.eval_times.append(elapsed)
-        self.history.append(value)
+        _record(self, time.perf_counter() - start, value)
         return value
 
     @property
     def n_evals(self) -> int:
         return len(self.history)
+
+
+def _split_angles(x: np.ndarray, p: int) -> tuple[np.ndarray, np.ndarray]:
+    angles = np.asarray(x, dtype=np.float64)
+    if angles.shape != (2 * p,):
+        raise ValueError(
+            f"x must have shape ({2 * p},) as [γ_1..γ_p, β_1..β_p], got {angles.shape}"
+        )
+    return angles[:p], angles[p:]
+
+
+def _record(objective: "Expectation | CVaRObjective", elapsed: float, value: float) -> None:
+    slow = objective.slow_eval_s
+    if elapsed > slow and not any(t > slow for t in objective.eval_times):
+        warnings.warn(
+            f"one objective evaluation on {objective.circuit.num_qubits} qubits took "
+            f"{elapsed:.2f} s, consider backend='fastsim'",
+            stacklevel=3,
+        )
+    objective.eval_times.append(elapsed)
+    objective.history.append(value)
 
 
 def expectation_fn(
@@ -270,6 +283,42 @@ def initial_points(
     return points
 
 
+def cvar(energies: np.ndarray, weights: np.ndarray, alpha: float) -> float:
+    if not 0 < alpha <= 1:
+        raise ValueError(f"alpha must be in (0, 1], got {alpha}")
+    values = np.asarray(energies, dtype=np.float64)
+    counts = np.asarray(weights, dtype=np.float64)
+    if values.ndim != 1 or counts.shape != values.shape or not counts.sum() > 0:
+        raise ValueError("energies and weights must be 1-D of the same length with positive total")
+    order = np.argsort(values, kind="stable")
+    values, counts = values[order], counts[order]
+    target = alpha * counts.sum()
+    before = np.cumsum(counts) - counts
+    taken = np.clip(target - before, 0.0, counts)
+    return float(values @ taken / target)
+
+
+def cvar_from_counts(counts: dict[str, int], qubo: Qubo, alpha: float) -> float:
+    bits = np.array([bits_from_bitstring(bitstring, qubo.n) for bitstring in counts])
+    return cvar(energy(bits, qubo), np.fromiter(counts.values(), dtype=np.float64), alpha)
+
+
+def measure_for_aer(circuit: QuantumCircuit, seed: int) -> QuantumCircuit:
+    return transpile_for_aer(circuit.measure_all(inplace=False), seed)
+
+
+def run_sampler(
+    measured: QuantumCircuit,
+    gammas: np.ndarray,
+    betas: np.ndarray,
+    shots: int,
+    sampler: BaseSamplerV2,
+) -> dict[str, int]:
+    values = assemble_values(measured, gammas, betas)
+    result = sampler.run([(measured, values)], shots=shots).result()[0]
+    return result.data.meas.get_counts()
+
+
 def sample_counts(
     circuit: QuantumCircuit,
     gammas: np.ndarray,
@@ -278,10 +327,48 @@ def sample_counts(
     sampler: BaseSamplerV2,
     seed: int,
 ) -> dict[str, int]:
-    measured = transpile_for_aer(circuit.measure_all(inplace=False), seed)
-    values = assemble_values(measured, gammas, betas)
-    result = sampler.run([(measured, values)], shots=shots).result()[0]
-    return result.data.meas.get_counts()
+    return run_sampler(measure_for_aer(circuit, seed), gammas, betas, shots, sampler)
+
+
+@dataclass(eq=False)
+class CVaRObjective:
+    circuit: QuantumCircuit
+    sampler: BaseSamplerV2
+    qubo: Qubo
+    alpha: float
+    shots: int = CVAR_SHOTS
+    slow_eval_s: float = SLOW_EVAL_S
+    history: list[float] = field(default_factory=list)
+    eval_times: list[float] = field(default_factory=list)
+    p: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not 0 < self.alpha <= 1:
+            raise ValueError(f"alpha must be in (0, 1], got {self.alpha}")
+        self.p = len(split_params(self.circuit)[0])
+
+    def __call__(self, x: np.ndarray) -> float:
+        gammas, betas = _split_angles(x, self.p)
+        start = time.perf_counter()
+        counts = run_sampler(self.circuit, gammas, betas, self.shots, self.sampler)
+        value = cvar_from_counts(counts, self.qubo, self.alpha)
+        _record(self, time.perf_counter() - start, value)
+        return value
+
+    @property
+    def n_evals(self) -> int:
+        return len(self.history)
+
+
+def cvar_fn(
+    measured_t: QuantumCircuit,
+    qubo: Qubo,
+    sampler: BaseSamplerV2,
+    alpha: float,
+    shots: int = CVAR_SHOTS,
+    slow_eval_s: float = SLOW_EVAL_S,
+) -> CVaRObjective:
+    return CVaRObjective(measured_t, sampler, qubo, alpha, shots, slow_eval_s)
 
 
 def run_qaoa(
@@ -291,26 +378,43 @@ def run_qaoa(
     n_starts: int = 5,
     maxiter: int = 300,
     shots: int = 4096,
+    objective: str = "energy",
+    cvar_alpha: float = 0.1,
     warm_start: tuple[np.ndarray, np.ndarray] | None = None,
     backend: str = "aer",
 ) -> QAOAResult:
+    if objective not in OBJECTIVES:
+        raise ValueError(f"unknown objective {objective!r}: expected one of {OBJECTIVES}")
     start = time.perf_counter()
     op, const = qubo_to_ising(qubo)
     cost_op, scale = normalize_operator(op)
     circuit = build_qaoa_circuit(cost_op, p)
     circuit_t = transpile_for_aer(circuit, seed)
     estimator = make_estimator(backend, seed=seed)
+    sampler = make_sampler(backend, seed=seed)
+    measured_t = measure_for_aer(circuit, seed)
+
+    def make_objective() -> Expectation | CVaRObjective:
+        if objective == "cvar":
+            return cvar_fn(measured_t, qubo, sampler, cvar_alpha)
+        return expectation_fn(circuit_t, cost_op, estimator)
 
     best_fn, best_x, best_value, n_evals = None, None, np.inf, 0
     for x0 in initial_points(p, n_starts, seed, warm_start):
-        fn = expectation_fn(circuit_t, cost_op, estimator)
+        fn = make_objective()
         res = minimize(fn, x0, method="COBYLA", options={"maxiter": maxiter, "rhobeg": 0.3})
         n_evals += fn.n_evals
         if res.fun < best_value:
             best_fn, best_x, best_value = fn, res.x, float(res.fun)
 
+    if objective == "cvar":
+        history = list(best_fn.history)
+        best_expectation = scale * expectation_fn(circuit_t, cost_op, estimator)(best_x) + const
+    else:
+        history = [scale * value + const for value in best_fn.history]
+        best_expectation = scale * best_value + const
+
     gammas, betas = best_x[:p], best_x[p:]
-    counts = sample_counts(circuit, gammas, betas, shots, make_sampler(backend, seed=seed), seed)
     return QAOAResult(
         p=p,
         mixer="x",
@@ -318,12 +422,14 @@ def run_qaoa(
         scale=scale,
         gammas=gammas,
         betas=betas,
-        energy_history=[scale * value + const for value in best_fn.history],
-        best_expectation=scale * best_value + const,
+        energy_history=history,
+        best_expectation=best_expectation,
         n_evals=n_evals,
         wall_time_s=time.perf_counter() - start,
-        counts=counts,
+        counts=run_sampler(measured_t, gammas, betas, shots, sampler),
         backend=backend,
+        objective=objective,
+        cvar_alpha=cvar_alpha if objective == "cvar" else None,
     )
 
 
