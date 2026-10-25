@@ -6,7 +6,7 @@ from pathlib import Path
 from lodq.classical import dp_solve
 from lodq.metrics import problem_from_scene
 from lodq.qaoa import run_qaoa_sweep, save_qaoa_run
-from lodq.qubo import bits_from_bitstring, build_qubo, decode, is_feasible
+from lodq.qubo import bits_from_bitstring, build_qubo, decode, default_penalties, is_feasible
 from lodq.scene import load_scene
 
 
@@ -20,13 +20,12 @@ def main() -> None:
     parser.add_argument("--shots", type=int, default=4096)
     parser.add_argument("--objective", choices=["energy", "cvar"], default="energy")
     parser.add_argument("--cvar-alpha", type=float, default=0.1)
-    parser.add_argument("--backend", choices=["aer", "statevector"], default="aer")
+    parser.add_argument("--backend", choices=["aer", "statevector", "fastsim"], default="aer")
     parser.add_argument("--root", type=Path, default=Path("runs"))
     args = parser.parse_args()
 
     problem = problem_from_scene(load_scene(args.scene))
-    A = 1.5 * float(problem.v.max())
-    B = 1.2 * float((problem.v - problem.v[:, -1:]).max())
+    A, B = default_penalties(problem.v)
     qubo = build_qubo(problem.v, problem.dw, problem.dW, A, B)
     dp = dp_solve(problem.v, problem.dw, problem.dW)
 

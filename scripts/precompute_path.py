@@ -5,7 +5,7 @@ import json
 import time
 from pathlib import Path
 
-from lodq.demo import load_path, precompute_path
+from lodq.demo import XY_P, load_path, precompute_path
 
 
 def main() -> None:
@@ -22,6 +22,8 @@ def main() -> None:
     parser.add_argument("--shots", type=int, default=4096)
     parser.add_argument("--backend", choices=["fastsim", "aer", "statevector"], default="fastsim")
     parser.add_argument("--exact", action="store_true", help="also store exact metrics")
+    parser.add_argument("--no-xy", action="store_true", help="skip the XY-mixer run per frame")
+    parser.add_argument("--xy-p", type=int, default=XY_P, help="depth of the XY-mixer run")
     args = parser.parse_args()
 
     scene_name, cameras = load_path(args.path)
@@ -41,15 +43,21 @@ def main() -> None:
         shots=args.shots,
         backend=args.backend,
         exact=args.exact,
+        xy=not args.no_xy,
+        xy_p=args.xy_p,
     )
 
-    print(f"{'frame':>5} {'AR_greedy':>9} {'AR_qaoa':>8} {'P_feas':>7} {'P_opt':>7} {'time_s':>7}")
+    header = f"{'frame':>5} {'AR_greedy':>9} {'AR_qaoa':>8} {'P_feas':>7} {'P_opt':>7}"
+    print(f"{header} {'P_feas_xy':>9} {'P_opt_xy':>8} {'time_s':>7}")
     for path in paths:
         record = json.loads(path.read_text(encoding="utf-8"))
         metrics = record["metrics"]
+        xy = (record.get("xy") or {}).get("metrics_exact")
+        xy_cells = "        -        -" if xy is None else f"{xy['p_feas']:9.3f} {xy['p_opt']:8.3f}"
         print(
             f"{record['frame']:5d} {record['ar_greedy']:9.3f} {metrics['ar_top1']:8.3f} "
-            f"{metrics['p_feas']:7.3f} {metrics['p_opt']:7.3f} {record['timings']['frame_s']:7.1f}"
+            f"{metrics['p_feas']:7.3f} {metrics['p_opt']:7.4f} {xy_cells} "
+            f"{record['timings']['frame_s']:7.1f}"
         )
     print(f"{len(paths)} frames in {time.perf_counter() - started:.1f} s -> {args.out}")
 

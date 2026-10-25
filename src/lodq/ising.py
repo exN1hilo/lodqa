@@ -5,7 +5,7 @@ import numpy as np
 from qiskit.quantum_info import SparsePauliOp
 
 from lodq.metrics import Problem, problem_from_scene, toy_trap_problem
-from lodq.qubo import Qubo, build_qubo
+from lodq.qubo import Qubo, build_qubo, default_penalties
 from lodq.scene import load_scene
 
 TOL = 1e-12
@@ -80,9 +80,7 @@ def summary(op: SparsePauliOp) -> dict[str, int | float]:
 
 
 def _safe_qubo(problem: Problem) -> Qubo:
-    A = 1.5 * float(problem.v.max())
-    B = 1.2 * float((problem.v - problem.v[:, -1:]).max())
-    return build_qubo(problem.v, problem.dw, problem.dW, A, B)
+    return build_qubo(problem.v, problem.dw, problem.dW, *default_penalties(problem.v))
 
 
 def main() -> None:

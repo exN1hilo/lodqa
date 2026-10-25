@@ -19,7 +19,9 @@ def test_dp_matches_brute_force_on_trap(trap: Problem) -> None:
 
 
 @pytest.mark.parametrize("seed", range(300))
-def test_dp_matches_brute_force_on_random_problems(seed: int, random_problem: RandomProblem) -> None:
+def test_dp_matches_brute_force_on_random_problems(
+    seed: int, random_problem: RandomProblem
+) -> None:
     utility, weights, budget = random_problem(seed)
 
     solution = dp_solve(utility, weights, budget)

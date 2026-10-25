@@ -63,9 +63,9 @@ def render_solution(
 
     percent = 100 * used / scene.budget_W if scene.budget_W else 0.0
     stats = (
-        f"Бюджет: {used:,} / {scene.budget_W:,} треугольников ({percent:.0f} %)\n"
-        f"Качество: V / V_DP = {v_ratio:.2f}"
-    ).replace(",", " ")
+        f"Budget: {used:,} / {scene.budget_W:,} triangles ({percent:.0f}%)\n"
+        f"Quality: V / V_DP = {v_ratio:.2f}"
+    )
     font_file = findfont("DejaVu Sans")
     plotter.add_text(title, position="upper_edge", font_size=16, font_file=font_file)
     plotter.add_text(stats, position="lower_left", font_size=10, font_file=font_file)
@@ -95,7 +95,7 @@ def compare_render(
         if fnmatchcase(run["tag"], f"{name}__x__s*__p{p}")
     ]
     qaoa_choice: tuple[int, ...] | None = None
-    qaoa_title = "QAOA: нет данных"
+    qaoa_title = "QAOA: no data"
     qaoa_ratio = 0.0
     if runs:
         runs.sort(key=lambda run: (float(run["metrics"]["ar_top1"]), int(run["qaoa"]["seed"])))
@@ -109,7 +109,7 @@ def compare_render(
         samples = top_k(counts, qubo, problem.v, problem.dw, dp, k=len(counts))
         sample = next((sample for sample in samples if sample["feasible"]), None)
         if sample is None:
-            qaoa_title += "\nНет допустимых сэмплов"
+            qaoa_title += "\nNo feasible samples"
         else:
             qaoa_choice = decode(bits_from_bitstring(str(sample["bitstring"]), qubo.n), qubo)
             qaoa_ratio = float(sample["value"]) / dp.value if dp.value else 0.0
@@ -193,7 +193,7 @@ def compare_zoom(
             )
             count = f"{obj.tri_counts[j]:,}".replace(",", " ")
             plotter.add_text(
-                f"{method}: LOD{j}, {count} треугольников",
+                f"{method}: LOD{j}, {count} triangles",
                 position="upper_edge",
                 font_size=14,
                 font_file=font_file,

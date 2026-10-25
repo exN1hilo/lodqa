@@ -8,44 +8,63 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.colors import to_hex
-from matplotlib.patches import Circle, Polygon, Rectangle
-from matplotlib.text import Text
+from qiskit.quantum_info import Statevector
 from streamlit.testing.v1 import AppTest
 
 from lodq.classical import dp_solve, greedy_solve
 from lodq.demo import (
+    GRAY,
+    LIVE_P,
     LOD_RAMP,
     METHOD_COLORS,
     METHODS,
-    SURFACE,
-    budget_chart,
+    OUTCOMES,
+    PALETTES,
+    XY_OBJECTIVE,
+    XY_P,
+    XY_WARM_MAXITER,
+    _place_labels,
+    adapt_angles,
+    budget_figure,
     budget_range,
     budget_rows,
-    choice_matrices,
+    choice_frame,
     choice_matrix,
     classical_record,
-    figure_png,
+    distances,
+    exact_distribution,
     frame_penalties,
     frame_scene,
+    frame_story,
     frames_signature,
-    headline,
+    live_pair,
+    live_qaoa,
     live_record,
     load_frames,
     load_path,
     lod_colors,
     method_choice,
+    method_color,
+    outcome_figure,
+    outcome_shares,
+    percent_text,
     precompute_path,
+    qaoa_metrics,
     qaoa_top_choice,
-    scene_3d,
+    record_angles,
     scene_frames,
+    text_on,
     top10_table,
-    top_view,
+    top_map,
+    xy_metrics,
+    xy_view,
 )
+from lodq.evaluate import evaluate_probabilities, p_opt_random
 from lodq.fastsim import probabilities, qaoa_state
+from lodq.ising import qubo_to_ising
 from lodq.metrics import problem_from_scene
 from lodq.plots import _qaoa_frame_ratios
+from lodq.qaoa import QAOAResult, assemble_values, build_qaoa_circuit_xy, normalize_operator
 from lodq.qubo import (
     all_energies,
     bits_from_bitstring,
@@ -87,7 +106,15 @@ def mini(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, list[dic
     _, cameras = load_path(path_json)
     out = root / "path"
     precompute_path(
-        scene_path, cameras, out, n_starts=2, maxiter=20, warm_maxiter=10, shots=512, exact=True
+        scene_path,
+        cameras,
+        out,
+        n_starts=2,
+        maxiter=20,
+        warm_maxiter=10,
+        shots=512,
+        exact=True,
+        xy=True,
     )
     return scene_path, out, load_frames(out)
 
@@ -301,144 +328,6 @@ def test_live_record_runs_p1_for_new_budget(mini: tuple[Path, Path, list[dict]])
     assert json.loads(json.dumps(record)) == record
 
 
-def app(frames_dir: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
-    monkeypatch.setenv("LODQ_FRAMES_DIR", str(frames_dir))
-    return AppTest.from_file(str(REPO / "app" / "streamlit_app.py"), default_timeout=120).run()
-
-
-def test_app_without_frames_shows_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    at = app(tmp_path, monkeypatch)
-
-    assert not at.exception
-    assert "make precompute" in at.info[0].value
-    assert len(at.sidebar.slider) == 0
-
-
-def test_app_sidebar_defaults(
-    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _, out, _ = mini
-
-    at = app(out, monkeypatch)
-
-    assert not at.exception
-    assert at.sidebar.selectbox[0].options == ["mini"]
-    frame, budget = at.sidebar.slider
-    assert (frame.min, frame.max, frame.value) == (0, 2, 0)
-    assert (budget.min, budget.max, budget.value) == (12000, 22000, 17000)
-    assert at.sidebar.button[0].disabled
-    assert "precomputed, p = 2" in at.caption[0].value
-    assert at.session_state["record"]["frame"] == 0
-
-
-def test_app_frame_slider_switches_cached_frame(
-    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _, out, frames = mini
-    at = app(out, monkeypatch)
-
-    at.sidebar.slider[0].set_value(2).run()
-
-    assert at.session_state["record"] == frames[2]
-    assert "Frame 2 of 2" in at.caption[0].value
-
-
-def test_app_budget_change_enables_live_run(
-    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _, out, _ = mini
-    at = app(out, monkeypatch)
-
-    at.sidebar.slider[1].set_value(22000).run()
-
-    assert not at.sidebar.button[0].disabled
-    assert "not computed" in at.caption[0].value
-    assert at.session_state["record"]["qaoa"] is None
-    assert at.session_state["record"]["problem"]["dW"] == 4
-
-    at.sidebar.button[0].click().run()
-
-    assert not at.exception
-    assert "live, p = 1" in at.caption[0].value
-    assert at.session_state["record"]["qaoa"]["p"] == 1
-    assert at.session_state["record"]["budget_W"] == 22000
-
-
-def test_headline_for_cached_frame(mini: tuple[Path, Path, list[dict]]) -> None:
-    _, _, frames = mini
-    record = frames[0]
-    exact = record["metrics_exact"]
-
-    cards = headline(record)
-
-    assert [card["label"] for card in cards] == [
-        "V_DP",
-        "AR Greedy",
-        "AR QAOA (top-1)",
-        "Optimum amplification",
-    ]
-    assert cards[0]["value"] == f"{record['dp']['value']:.3f}"
-    assert cards[1]["value"] == f"{record['ar_greedy']:.3f}"
-    assert cards[2]["value"] == f"{exact['ar_top1']:.3f}"
-    assert cards[2]["delta"] == f"{exact['ar_top1'] - record['ar_greedy']:+.3f} vs Greedy"
-    assert cards[3]["value"] == f"{exact['amplification']:.2f}×"
-    assert "exact distribution" in cards[2]["help"]
-
-
-def test_headline_uses_counts_without_exact_metrics(mini: tuple[Path, Path, list[dict]]) -> None:
-    _, _, frames = mini
-    record = frames[1] | {"metrics_exact": None}
-
-    cards = headline(record)
-
-    assert cards[2]["value"] == f"{record['metrics']['ar_top1']:.3f}"
-    assert cards[3]["value"] == f"{record['metrics']['amplification']:.2f}×"
-    assert "sampled counts" in cards[3]["help"]
-
-
-def test_headline_marks_greedy_loss() -> None:
-    record = {
-        "ar_greedy": 0.861,
-        "dp": {"value": 1.147},
-        "metrics": None,
-        "metrics_exact": None,
-    }
-
-    cards = headline(record)
-
-    assert cards[1]["delta"] == "-0.139 vs DP"
-    assert [card["value"] for card in cards[2:]] == ["—", "—"]
-
-
-def test_headline_without_qaoa(mini: tuple[Path, Path, list[dict]]) -> None:
-    _, _, frames = mini
-
-    record = classical_record(frames[0], 22000)
-
-    cards = headline(record)
-
-    assert cards[0]["value"] == f"{record['dp']['value']:.3f}"
-    assert cards[1]["value"] == f"{record['ar_greedy']:.3f}"
-    assert [card["value"] for card in cards[2:]] == ["—", "—"]
-
-
-def test_app_metric_row(
-    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _, out, frames = mini
-    at = app(out, monkeypatch)
-
-    labels = [metric.label for metric in at.metric]
-    values = [metric.value for metric in at.metric]
-
-    assert labels == ["V_DP", "AR Greedy", "AR QAOA (top-1)", "Optimum amplification"]
-    assert values == [card["value"] for card in headline(frames[0])]
-
-    at.sidebar.slider[1].set_value(22000).run()
-
-    assert [metric.value for metric in at.metric][2:] == ["—", "—"]
-
-
 def test_lod_colors_follow_ordinal_ramp() -> None:
     assert lod_colors(3) == [LOD_RAMP[0], LOD_RAMP[2], LOD_RAMP[4]]
     assert lod_colors(1) == [LOD_RAMP[0]]
@@ -480,78 +369,6 @@ def test_qaoa_top_choice_none_without_feasible_samples(
     assert qaoa_top_choice(classical_record(frames[0], 22000)) is None
 
 
-def circle_colors(fig, scene) -> dict[str, str]:
-    ax = fig.axes[0]
-    circles = [patch for patch in ax.patches if isinstance(patch, Circle)]
-    by_center = {tuple(np.round(c.center, 6)): to_hex(c.get_facecolor()) for c in circles}
-    return {
-        obj.name: by_center[(round(obj.position[0], 6), round(obj.position[2], 6))]
-        for obj in scene.objects
-    }
-
-
-def test_top_view_colors_objects_by_lod(mini: tuple[Path, Path, list[dict]]) -> None:
-    _, _, frames = mini
-    scene = frame_scene(frames[0])
-
-    fig = top_view(scene, (0, 2), "DP")
-
-    assert circle_colors(fig, scene) == {"a": LOD_RAMP[0], "b": LOD_RAMP[4]}
-    ax = fig.axes[0]
-    assert ax.get_title(loc="left") == "Top view · DP"
-    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["LOD0", "LOD1", "LOD2"]
-    texts = {t.get_text() for t in ax.texts}
-    assert {"a · LOD0", "b · LOD2", "camera"} <= texts
-
-
-def test_top_view_without_choice_is_gray(mini: tuple[Path, Path, list[dict]]) -> None:
-    _, _, frames = mini
-    scene = frame_scene(frames[0])
-
-    fig = top_view(scene, None, "QAOA")
-
-    assert set(circle_colors(fig, scene).values()) == {"#d4d3cf"}
-    assert fig.axes[0].get_title(loc="left") == "Top view · QAOA: no choice"
-
-
-def test_top_view_separates_labels_of_stacked_objects() -> None:
-    objects = tuple(
-        SceneObject(name, (1.0, height, 4.0), radius, (9000, 4000, 1000))
-        for name, height, radius in [("low", 0.0, 1.0), ("high", 5.0, 1.2), ("mid", 2.0, 0.9)]
-    )
-    scene = Scene("stack", objects, Camera((0.0, 2.0, -6.0)), budget_W=20000)
-
-    fig = top_view(scene, (0, 1, 2), "DP")
-
-    renderer = FigureCanvasAgg(fig).get_renderer()
-    boxes = [
-        Text.get_window_extent(t, renderer) for t in fig.axes[0].texts if "LOD" in t.get_text()
-    ]
-    assert len(boxes) == 3
-    assert not any(a.overlaps(b) for i, a in enumerate(boxes) for b in boxes[i + 1 :])
-
-
-def test_app_method_switch(
-    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _, out, _ = mini
-    at = app(out, monkeypatch)
-
-    assert at.radio[0].options == list(METHODS)
-    assert at.radio[0].value == "Greedy"
-
-    at.radio[0].set_value("DP").run()
-
-    assert not at.exception
-    assert at.radio[0].value == "DP"
-
-    at.sidebar.slider[1].set_value(22000).run()
-    at.radio[0].set_value("QAOA").run()
-
-    assert not at.exception
-    assert any("QAOA was not run" in caption.value for caption in at.caption)
-
-
 def test_choice_matrix_is_one_hot() -> None:
     np.testing.assert_array_equal(choice_matrix((2, 0), 2, 3), [[0, 0, 1], [1, 0, 0]])
     np.testing.assert_array_equal(choice_matrix(None, 2, 3), np.zeros((2, 3)))
@@ -588,51 +405,6 @@ def test_budget_rows_without_qaoa(mini: tuple[Path, Path, list[dict]]) -> None:
     assert rows["DP"]["used"] <= 4
 
 
-def filled_cells(ax) -> dict[tuple[int, int], str]:
-    cells = {}
-    for patch in ax.patches:
-        if isinstance(patch, Polygon) and to_hex(patch.get_facecolor()) != SURFACE:
-            x, y = patch.get_xy()[0]
-            cells[round(float(y)), round(float(x))] = to_hex(patch.get_facecolor())
-    return cells
-
-
-def test_choice_matrices_draw_selected_lods(mini: tuple[Path, Path, list[dict]]) -> None:
-    _, _, frames = mini
-    record = classical_record(frames[0], 22000)
-
-    fig = choice_matrices(record)
-
-    titles = [ax.get_title() for ax in fig.axes]
-    assert [title.split("\n")[0] for title in titles] == list(METHODS)
-    assert titles[1] == "QAOA\nno choice"
-    assert titles[2] == "DP\nAR 1.000"
-    greedy, qaoa, dp = (filled_cells(ax) for ax in fig.axes)
-    assert greedy == {(i, j): lod_colors(3)[j] for i, j in enumerate(record["greedy"]["choice"])}
-    assert dp == {(i, j): lod_colors(3)[j] for i, j in enumerate(record["dp"]["choice"])}
-    assert qaoa == {}
-    assert [t.get_text() for t in fig.axes[0].get_yticklabels()] == ["a", "b"]
-
-
-def test_budget_chart_bars_and_limit(mini: tuple[Path, Path, list[dict]]) -> None:
-    _, _, frames = mini
-    record = frames[0]
-    rows = budget_rows(record)
-
-    fig = budget_chart(record)
-
-    ax = fig.axes[0]
-    bars = [patch for patch in ax.patches if isinstance(patch, Rectangle)]
-    assert [bar.get_width() for bar in bars] == [row["used"] or 0 for row in rows]
-    assert [to_hex(bar.get_facecolor()) for bar in bars] == [
-        METHOD_COLORS[method] for method in METHODS
-    ]
-    assert ax.lines[0].get_xdata()[0] == record["problem"]["dW"]
-    texts = {t.get_text() for t in ax.texts}
-    assert f"dW = {record['problem']['dW']}" in texts
-    assert f"{record['dp']['used']} / {record['problem']['dW']}" in texts
-
-
 def test_top10_table(mini: tuple[Path, Path, list[dict]]) -> None:
     _, _, frames = mini
     record = frames[0]
@@ -667,26 +439,6 @@ def test_top10_table_empty_without_qaoa(mini: tuple[Path, Path, list[dict]]) -> 
     assert "bitstring" in table.columns
 
 
-def test_app_right_column_and_top10(
-    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _, out, frames = mini
-    at = app(out, monkeypatch)
-
-    assert [header.value for header in at.subheader] == [
-        "LOD choice per method",
-        "Budget used",
-        "Top-10 bitstrings",
-    ]
-    assert len(at.dataframe) == 1
-    assert list(at.dataframe[0].value["bitstring"]) == [r["bitstring"] for r in frames[0]["top10"]]
-
-    at.sidebar.slider[1].set_value(22000).run()
-
-    assert len(at.dataframe) == 0
-    assert any("no samples yet" in caption.value for caption in at.caption)
-
-
 def reference_top_choice(record: dict) -> tuple[int, ...] | None:
     problem = record["problem"]
     v, dw = np.asarray(problem["v"]), np.asarray(problem["dw"])
@@ -717,15 +469,6 @@ def test_qaoa_top_choice_matches_reference(mini: tuple[Path, Path, list[dict]], 
     assert qaoa_top_choice(shuffled) == reference_top_choice(shuffled)
 
 
-def test_figure_png_returns_png(mini: tuple[Path, Path, list[dict]]) -> None:
-    _, _, frames = mini
-
-    data = figure_png(budget_chart(frames[0]))
-
-    assert data.startswith(b"\x89PNG\r\n\x1a\n")
-    assert len(data) > 1000
-
-
 def test_frames_signature_tracks_files(mini: tuple[Path, Path, list[dict]], tmp_path: Path) -> None:
     _, out, _ = mini
     copy = tmp_path / "frames"
@@ -744,88 +487,507 @@ def test_frames_signature_tracks_files(mini: tuple[Path, Path, list[dict]], tmp_
     assert third != second
 
 
-def test_app_renders_cached_images(
+# ----------------------------------------------------------------- XY and live runs
+def test_precompute_adds_xy_run(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+
+    for record in frames:
+        xy = record["xy"]
+        assert xy["qaoa"]["mixer"] == "xy"
+        assert xy["qaoa"]["backend"] == "fastsim"
+        assert xy["qaoa"]["p"] == XY_P
+        assert xy["qaoa"]["objective"] == XY_OBJECTIVE
+        assert xy["penalties"]["A"] == 0.0
+        assert xy["metrics"]["p_onehot"] == 1.0
+        assert xy["metrics_exact"]["p_onehot"] == pytest.approx(1.0)
+        assert xy["p_opt_onehot_random"] == pytest.approx(1 / 9)
+        assert 0 < len(xy["top10"]) <= 10
+    assert frames[1]["xy"]["qaoa"]["n_evals"] <= 2 * XY_WARM_MAXITER
+
+
+def test_exact_distribution_of_xy_matches_qiskit(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    record = frames[0]
+    problem = record["problem"]
+    v, dw = np.asarray(problem["v"]), np.asarray(problem["dw"])
+    qubo = build_qubo(v, dw, problem["dW"], 0.0, record["xy"]["penalties"]["B"])
+    fields = {k: record["xy"]["qaoa"][k] for k in QAOAResult.__dataclass_fields__}
+    result = QAOAResult(**fields)
+
+    distribution = exact_distribution(qubo, result)
+
+    raw_op, _ = qubo_to_ising(qubo)
+    cost_op, _ = normalize_operator(raw_op)
+    circuit = build_qaoa_circuit_xy(cost_op, result.p, qubo.N, qubo.M, qubo.K)
+    values = assemble_values(circuit, result.gammas, result.betas)
+    reference = Statevector.from_instruction(circuit.assign_parameters(values).decompose())
+    np.testing.assert_allclose(distribution, reference.probabilities(), atol=1e-12)
+    assert record["xy"]["metrics_exact"]["p_opt"] == pytest.approx(
+        evaluate_probabilities(
+            distribution, qubo, v, dw, dp_solve(v, dw, problem["dW"]), p_opt_random(qubo)
+        ).p_opt
+    )
+
+
+def test_method_choice_of_xy(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+
+    assert method_choice(frames[0], "QAOA XY") == qaoa_top_choice(xy_view(frames[0]))
+    assert method_choice(classical_record(frames[0], 22000), "QAOA XY") is None
+    assert xy_view(classical_record(frames[0], 22000)) is None
+
+
+def test_adapt_angles_interpolates_up_only() -> None:
+    angles = ([0.2, 0.4], [-0.5, -0.3])
+
+    assert adapt_angles(None, 2) is None
+    np.testing.assert_allclose(adapt_angles(angles, 2)[0], angles[0])
+    gammas, betas = adapt_angles(angles, 4)
+    assert gammas.shape == betas.shape == (4,)
+    assert adapt_angles(angles, 1) is None
+
+
+def test_record_angles(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+
+    assert record_angles(frames[0], "x") == (
+        frames[0]["qaoa"]["gammas"],
+        frames[0]["qaoa"]["betas"],
+    )
+    assert record_angles(frames[0], "xy")[0] == frames[0]["xy"]["qaoa"]["gammas"]
+    assert record_angles(classical_record(frames[0], 22000), "x") is None
+
+
+def test_live_qaoa_runs_both_mixers_anywhere(mini: tuple[Path, Path, list[dict]]) -> None:
+    scene_path, _, _ = mini
+    camera = (0.5, 2.0, -3.0)
+
+    live = live_qaoa(scene_path, camera, 20000, mixers=("x", "xy"), maxiter=10, exact=True)
+
+    assert live["camera_position"] == list(camera)
+    assert live["budget_W"] == 20000
+    assert live["frame"] == -1
+    assert live["qaoa"]["mixer"] == "x"
+    assert live["xy"]["qaoa"]["mixer"] == "xy"
+    assert live["metrics_exact"] is not None
+    assert live["xy"]["metrics_exact"]["p_onehot"] == pytest.approx(1.0)
+    assert set(live["timings"]) == {"frame_s", "x_s", "xy_s"}
+    assert live["live"] == {"mixers": ["x", "xy"], "p": LIVE_P, "objective": "energy"}
+    assert json.loads(json.dumps(live)) == live
+    with pytest.raises(ValueError, match="mixers"):
+        live_qaoa(scene_path, camera, 20000, mixers=("z",))
+
+
+def test_live_pair_uses_default_depths(mini: tuple[Path, Path, list[dict]]) -> None:
+    scene_path, _, frames = mini
+
+    live = live_pair(scene_path, CAMERAS[0], 17000, 0)
+
+    assert live["qaoa"]["p"] == LIVE_P
+    assert live["xy"]["qaoa"]["p"] == XY_P
+    assert live["xy"]["qaoa"]["objective"] == XY_OBJECTIVE
+    assert live["dp"] == frames[0]["dp"]
+    assert live["timings"]["frame_s"] >= live["timings"]["xy_s"]
+
+
+# ----------------------------------------------------------------------- presentation
+def test_share_keeps_digits_for_small_values() -> None:
+    assert percent_text(0.5) == "50%"
+    assert percent_text(0.012) == "1.2%"
+    assert percent_text(0.00023) == "0.023%"
+    assert percent_text(-0.072) == "-7.2%"
+
+
+def test_frame_story(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    record = frames[0]
+    scene = frame_scene(record)
+    nearest = record["problem"]["names"][int(np.argmin(distances(scene)))]
+
+    story = frame_story(record, scene)
+
+    assert f"from **{nearest}**" in story
+    assert f"of the **{record['budget_W']:,}** triangles" in story
+    same = record | {"greedy": record["dp"], "ar_greedy": 1.0}
+    assert frame_story(same, scene).endswith("Greedy finds the same plan here.")
+    worse = record | {"greedy": {"choice": [2, 2]}, "ar_greedy": 0.9}
+    if record["dp"]["choice"] != [2, 2]:
+        assert "ends at **90%** of the best quality" in frame_story(worse, scene)
+
+
+def test_choice_frame(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    record = classical_record(frames[0], 22000)
+
+    table, levels = choice_frame(record)
+
+    assert list(table.columns) == ["Model", "Optimal", "Greedy", "QAOA X", "QAOA XY"]
+    assert list(levels["Optimal"]) == record["dp"]["choice"]
+    assert set(table["QAOA X"]) == {"–"}
+    assert list(table["Optimal"]) == [f"LOD{j}" for j in record["dp"]["choice"]]
+
+
+def test_budget_figure_stacks_models_against_the_budget(
+    mini: tuple[Path, Path, list[dict]],
+) -> None:
+    _, _, frames = mini
+    record = frames[0]
+    scene = frame_scene(record)
+
+    fig = budget_figure(record, scene)
+
+    bars = [trace for trace in fig.data if trace.type == "bar"]
+    by_method = {}
+    for bar in bars:
+        by_method[bar.y[0]] = by_method.get(bar.y[0], 0) + bar.x[0]
+    dp = sum(
+        obj.tri_counts[j] for obj, j in zip(scene.objects, record["dp"]["choice"], strict=True)
+    )
+    assert by_method["Optimal (DP)"] == dp
+    assert fig.layout.shapes[0].x0 == record["budget_W"]
+    texts = [a.text for a in fig.layout.annotations]
+    assert f"budget {record['budget_W']:,}" in texts
+    classical = budget_figure(classical_record(frames[0], 22000), scene)
+    assert "not run for this budget" in [a.text for a in classical.layout.annotations]
+
+
+def test_top_map_marks_models_that_differ_from_optimal(
+    mini: tuple[Path, Path, list[dict]],
+) -> None:
+    _, _, frames = mini
+    scene = frame_scene(frames[0])
+
+    fig = top_map(scene, (0, 2), "Greedy", dp_choice=(2, 2), path=CAMERAS)
+
+    circles = [shape for shape in fig.layout.shapes if shape.type == "circle"]
+    assert len(circles) == 2
+    colors = {shape.fillcolor for shape in circles}
+    assert colors == {LOD_RAMP[0], LOD_RAMP[4]}
+    dashed = [shape for shape in circles if shape.line.dash == "dash"]
+    assert len(dashed) == 1 and dashed[0].fillcolor == LOD_RAMP[0]
+    texts = [a.text for a in fig.layout.annotations]
+    assert "a · LOD0 ≠ optimal" in texts and "b · LOD2" in texts
+    names = {trace.name for trace in fig.data}
+    assert {"LOD0", "LOD1", "LOD2", "camera path"} <= names
+    gray = top_map(scene, None, "QAOA")
+    assert {shape.fillcolor for shape in gray.layout.shapes if shape.type == "circle"} == {GRAY}
+
+
+def test_place_labels_avoids_overlaps() -> None:
+    centers = np.array([[0.0, 0.0], [0.4, 1.6], [-0.3, 3.1], [5.0, 0.0]])
+    radii = np.array([0.6, 0.5, 0.6, 0.4])
+    texts = ["alpha · LOD0", "beta · LOD1", "gamma · LOD2", "delta · LOD0"]
+    unit_px = 40.0
+
+    placed = _place_labels(centers, radii, texts, unit_px)
+
+    boxes = []
+    for text, (x, y, xanchor, yanchor) in zip(texts, placed, strict=True):
+        w, h = (7 * len(text) + 6) / unit_px, 17 / unit_px
+        x0 = {"center": x - w / 2, "left": x, "right": x - w}[xanchor]
+        y0 = {"bottom": y, "top": y - h, "middle": y - h / 2}[yanchor]
+        boxes.append((x0, x0 + w, y0, y0 + h))
+    for i, a in enumerate(boxes):
+        for b in boxes[i + 1 :]:
+            assert not (a[0] < b[1] and a[1] > b[0] and a[2] < b[3] and a[3] > b[2])
+
+
+def test_outcome_shares_and_figure(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    x, xy = qaoa_metrics(frames[0]), xy_metrics(frames[0])
+
+    for metrics in (x, xy):
+        assert sum(outcome_shares(metrics).values()) == pytest.approx(1.0)
+    assert outcome_shares(xy)["Breaks one-LOD-per-model"] == pytest.approx(0.0, abs=1e-12)
+    assert outcome_shares(x)["Optimal plan"] == pytest.approx(x["p_opt"])
+
+    fig = outcome_figure({"X": x, "XY": xy})
+
+    assert [trace.name for trace in fig.data] == [name for name, _ in OUTCOMES]
+    assert list(fig.data[0].y) == ["XY", "X"]
+
+
+# --------------------------------------------------------------------------------- app
+def app(frames_dir: Path, monkeypatch: pytest.MonkeyPatch, page: str | None = None) -> AppTest:
+    monkeypatch.setenv("LODQ_FRAMES_DIR", str(frames_dir))
+    monkeypatch.setenv("LODQ_MESH_DIR", str(frames_dir.parent / "meshes"))
+    monkeypatch.syspath_prepend(str(REPO / "app"))
+    at = AppTest.from_file(str(REPO / "app" / "streamlit_app.py"), default_timeout=120).run()
+    if page is not None:
+        at.switch_page(page).run()
+    return at
+
+
+def viewer_payloads(at: AppTest) -> list[dict]:
+    return [json.loads(element.proto.json) for element in at.get("bidi_component")]
+
+
+def test_app_without_frames_shows_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    at = app(tmp_path, monkeypatch)
+
+    assert not at.exception
+    assert "make precompute" in at.info[0].value
+    assert len(at.slider) == 0
+
+
+def test_app_control_defaults(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, _ = mini
+
+    at = app(out, monkeypatch)
+
+    assert not at.exception
+    assert len(at.title) == 0
+    assert len(at.sidebar.children) == 0
+    assert at.selectbox[0].options == ["mini"]
+    frame, budget = at.slider
+    assert (frame.min, frame.max, frame.value) == (0, 2, 0)
+    assert (budget.min, budget.max, budget.value) == (12000, 22000, 17000)
+    assert at.button[0].disabled
+    assert "QAOA: precomputed" in at.caption[0].value
+    assert at.session_state["record"]["frame"] == 0
+
+
+def test_app_frame_slider_switches_cached_frame(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, frames = mini
+    at = app(out, monkeypatch)
+
+    at.slider[0].set_value(2).run()
+
+    assert at.session_state["record"] == frames[2]
+    assert "Frame 2 of 2" in at.caption[0].value
+    assert viewer_payloads(at)[0]["frame"] == 2
+
+
+def test_app_controls_survive_a_page_without_them(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, frames = mini
+    at = app(out, monkeypatch)
+
+    at.slider[0].set_value(2).run()
+    at.slider[1].set_value(22000).run()
+    at.switch_page("views/method.py").run()
+    at.switch_page("views/overview.py").run()
+
+    assert not at.exception
+    assert (at.slider[0].value, at.slider[1].value) == (2, 22000)
+    assert at.session_state["record"]["frame"] == 2
+
+    at.slider[0].set_value(1).run()
+
+    assert at.slider[1].value == frames[1]["budget_W"]
+
+
+def test_app_budget_change_runs_both_mixers_live(
     mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, out, _ = mini
     at = app(out, monkeypatch)
 
-    assert len(at.get("image")) == 3
+    at.slider[1].set_value(22000).run()
 
-    at.sidebar.slider[0].set_value(1).run()
-    at.sidebar.slider[0].set_value(0).run()
+    assert not at.button[0].disabled
+    assert "not run for this budget yet" in at.caption[0].value
+    assert at.session_state["record"]["qaoa"] is None
+
+    at.button[0].click().run()
 
     assert not at.exception
-    assert len(at.get("image")) == 3
+    record = at.session_state["record"]
+    assert "QAOA: live" in at.caption[0].value
+    assert record["budget_W"] == 22000
+    assert record["qaoa"]["p"] == LIVE_P
+    assert record["xy"]["qaoa"]["p"] == XY_P
+    assert at.button[0].disabled
+
+
+def test_app_overview_starts_with_the_viewer(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, frames = mini
+    at = app(out, monkeypatch)
+
+    # The page style is the only element above the viewer.
+    first, second = (at.main.children[k] for k in (0, 1))
+    assert first.type == "markdown" and first.value.lstrip().startswith("<style>")
+    assert second.type == "bidi_component"
+    assert len(at.metric) == 0
+    (payload,) = viewer_payloads(at)
+    assert payload["height"] == 640
+    story = payload["story"].replace("<b>", "**").replace("</b>", "**")
+    assert story == frame_story(frames[0], frame_scene(frames[0]))
+
+
+def test_app_method_switch_updates_the_viewer(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, frames = mini
+    at = app(out, monkeypatch)
+
+    assert viewer_payloads(at)[0]["method"] == "DP"
+    assert any("The plan of Optimal" in c.value for c in at.caption)
+
+    # The plan switch lives in the viewer, which sends its state back to the app.
+    at.session_state["overview_viewer"] = {"method": "Greedy"}
+    at.run()
+
+    assert not at.exception
+    payload = viewer_payloads(at)[0]
+    assert payload["method"] == "Greedy"
+    assert payload["mode"] == "orbit"
+    assert payload["choices"]["Greedy"] == frames[0]["greedy"]["choice"]
+    assert any("The plan of Greedy" in c.value for c in at.caption)
+
+    at.slider[1].set_value(22000).run()
+    at.session_state["overview_viewer"] = {"method": "QAOA"}
+    at.run()
+
+    assert not at.exception
+    assert any("has not been run for this budget" in c.value for c in at.caption)
+    assert viewer_payloads(at)[0]["choices"]["QAOA"] is None
+
+
+def test_app_overview_tables_and_charts(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, frames = mini
+    at = app(out, monkeypatch)
+
+    assert [header.value for header in at.subheader] == [
+        "Detail level per model",
+        "Triangle budget",
+        "Map from above",
+    ]
+    assert at.dataframe[0].value.columns[0] == "Model"
+    assert len(at.get("plotly_chart")) == 3
+    assert list(at.dataframe[1].value["bitstring"]) == [r["bitstring"] for r in frames[0]["top10"]]
+    assert list(at.dataframe[2].value["bitstring"]) == [
+        r["bitstring"] for r in frames[0]["xy"]["top10"]
+    ]
+
+    at.slider[1].set_value(22000).run()
+
+    assert len(at.dataframe) == 1
+    assert len(at.get("plotly_chart")) == 2
+    assert any("no samples yet" in caption.value for caption in at.caption)
+
+
+def test_app_viewer_payload(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, frames = mini
+    at = app(out, monkeypatch)
+
+    (payload,) = viewer_payloads(at)
+
+    assert payload["assets"] == "/app/static"
+    assert len(payload["assetVersion"]) == 12
+    assert [obj["name"] for obj in payload["scene"]["objects"]] == ["a", "b"]
+    assert all(len(obj["meshes"]) == 3 for obj in payload["scene"]["objects"])
+    assert payload["path"] == [list(c) for c in CAMERAS]
+    assert payload["budget"] == {"value": 17000, "min": 12000, "max": 22000, "step": 1000}
+    assert len(payload["quantum"]) == len(frames)
+    assert payload["quantum"][1]["choices"]["QAOA XY"] == list(method_choice(frames[1], "QAOA XY"))
+    assert (out.parent / "meshes").is_dir()
+
+
+def test_app_pages_render(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, _ = mini
+
+    explorer = app(out, monkeypatch, "views/explorer.py")
+    lab = app(out, monkeypatch, "views/lab.py")
+    method = app(out, monkeypatch, "views/method.py")
+
+    assert not explorer.exception and not lab.exception and not method.exception
+    # The explorer is one full-page view: no title, text or widgets around it.
+    (payload,) = viewer_payloads(explorer)
+    assert payload["mode"] == "drive" and payload["fullPage"]
+    assert (payload["scenes"], payload["sceneKey"], payload["runs"]) == (["mini"], "mini", [])
+    assert len(explorer.title) == len(explorer.slider) == len(explorer.caption) == 0
+    assert lab.title[0].value == "Quantum lab"
+    assert len(lab.metric) == 0
+    summaries = [m.value for m in lab.markdown if "finds the optimal plan" in m.value]
+    assert len(summaries) == 2 and all("of the best quality" in m for m in summaries)
+    assert method.title[0].value == "How it works"
+
+
+def test_app_explorer_lists_the_views_run_with_qaoa(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, frames = mini
+    at = app(out, monkeypatch, "views/explorer.py")
+
+    at.session_state["views"] = [frames[0] | {"timings": {"frame_s": 2.5}}]
+    at.run()
+
+    assert not at.exception
+    (run,) = viewer_payloads(at)[0]["runs"]
+    assert run["budget"] == f"{frames[0]['budget_W']:,}"
+    assert run["greedy"] == percent_text(frames[0]["ar_greedy"])
+    assert run["xyOptimum"] == percent_text(xy_metrics(frames[0])["p_opt"])
+    assert run["seconds"] == "2.5"
+
+
+def test_app_lab_runs_the_chosen_mixer(
+    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, out, _ = mini
+    at = app(out, monkeypatch, "views/lab.py")
+
+    at.get("button_group")[0].set_value("xy")
+    at.select_slider[0].set_value(1)
+    at.button[0].click().run()
+
+    assert not at.exception
+    runs = at.session_state["lab_runs"]
+    (live,) = runs.values()
+    assert live["qaoa"] is None
+    assert live["xy"]["qaoa"]["p"] == 1
+    assert sum("finds the optimal plan" in m.value for m in at.markdown) == 1
+    assert any("Your run" in m.value for m in at.markdown)
 
 
 def test_app_picks_up_new_frames(
     mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _, out, _ = mini
-    shutil.copy(out / "frame_00.json", tmp_path)
-    shutil.copy(out / "frame_01.json", tmp_path)
-    at = app(tmp_path, monkeypatch)
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    shutil.copy(out / "frame_00.json", frames_dir)
+    shutil.copy(out / "frame_01.json", frames_dir)
+    at = app(frames_dir, monkeypatch)
 
-    assert at.sidebar.slider[0].max == 1
+    assert at.slider[0].max == 1
 
-    shutil.copy(out / "frame_02.json", tmp_path)
+    shutil.copy(out / "frame_02.json", frames_dir)
     at.run()
 
-    assert at.sidebar.slider[0].max == 2
+    assert at.slider[0].max == 2
 
 
-def _trap_scene():
-    from lodq.scene import load_scene
+def test_dark_palette(mini: tuple[Path, Path, list[dict]]) -> None:
+    _, _, frames = mini
+    record = frames[0]
+    scene = frame_scene(record)
+    dark = PALETTES["dark"]
 
-    return load_scene(REPO / "scenes" / "greedy_trap_1.yaml")
+    assert lod_colors(3, "dark") == ["#9ec5f4", "#3987e5", "#184f95"]
+    assert text_on("#9ec5f4") == "#0b0b0b"
+    assert text_on("#184f95") == "#fcfcfb"
+    assert method_color("DP", "dark") == dark["dp"]
+    assert method_color("Greedy", "dark") == METHOD_COLORS["Greedy"]
 
-
-def test_scene_3d_colors_meshes_by_chosen_lod() -> None:
-    scene = _trap_scene()
-    choice = (0, 1, 2, 2, 1)
-    fig = scene_3d(scene, choice, "DP", path=[(0.0, 2.0, -5.0), (1.0, 2.0, -4.0)])
-    meshes = [trace for trace in fig.data if trace.type == "mesh3d"]
-    colors = lod_colors(scene.n_lods)
-    assert [mesh.color for mesh in meshes] == [colors[level] for level in choice]
-    assert [mesh.name for mesh in meshes] == [f"LOD{level}" for level in choice]
-    assert sum(bool(mesh.showlegend) for mesh in meshes) == len(set(choice))
-    names = {trace.name for trace in fig.data}
-    assert {"camera", "camera path", "field of view"} <= names
-    camera = next(trace for trace in fig.data if trace.name == "camera")
-    assert (camera.x[0], camera.y[0], camera.z[0]) == tuple(scene.camera.position)
-    assert fig.layout.scene.camera.up.y == 1
-
-
-def test_scene_3d_finer_lod_has_more_triangles() -> None:
-    scene = _trap_scene()
-    fine = scene_3d(scene, (0,) * scene.n_objects, "DP")
-    coarse = scene_3d(scene, (scene.n_lods - 1,) * scene.n_objects, "DP")
-
-    def triangles(fig) -> list[int]:
-        return [len(trace.i) for trace in fig.data if trace.type == "mesh3d"]
-
-    assert all(f > c for f, c in zip(triangles(fine), triangles(coarse), strict=True))
-
-
-def test_scene_3d_without_choice_is_gray() -> None:
-    scene = _trap_scene()
-    fig = scene_3d(scene, None, "QAOA")
-    meshes = [trace for trace in fig.data if trace.type == "mesh3d"]
-    assert {mesh.color for mesh in meshes} == {"#d4d3cf"}
-    assert not any(mesh.showlegend for mesh in meshes)
-    assert "camera path" not in {trace.name for trace in fig.data}
-
-
-def test_app_shows_3d_scene_tab(
-    mini: tuple[Path, Path, list[dict]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _, out, _ = mini
-    at = app(out, monkeypatch)
-
-    assert not at.exception
-    assert [tab.label for tab in at.tabs] == ["3D scene", "Top view"]
-    assert len(at.get("plotly_chart")) == 1
-    at.radio(key="method").set_value("QAOA").run()
-    assert not at.exception
-    assert len(at.get("plotly_chart")) == 1
+    budget = budget_figure(record, scene, "dark")
+    assert budget.layout.font.color == dark["ink"]
+    assert budget.layout.xaxis.gridcolor == dark["grid"]
+    assert {bar.marker.color for bar in budget.data} <= set(lod_colors(3, "dark"))
+    mapped = top_map(scene, (0, 2), "DP", theme="dark")
+    assert {s.fillcolor for s in mapped.layout.shapes} == {"#9ec5f4", "#184f95"}
+    outcome = outcome_figure({"XY": xy_metrics(record)}, "dark")
+    assert [bar.marker.color for bar in outcome.data] == list(dark["outcomes"])

@@ -136,9 +136,7 @@ def _evaluate_candidate(scene: Scene) -> TrapCandidate | None:
         return None
 
     remaining = problem.dW - greedy.used
-    untouched = [
-        i for i, choice in enumerate(greedy.choice) if choice == problem.M - 1
-    ]
+    untouched = [i for i, choice in enumerate(greedy.choice) if choice == problem.M - 1]
     upgrade_costs = [
         int(problem.dw[i, lod] - problem.dw[i, greedy.choice[i]])
         for i in untouched
@@ -226,7 +224,7 @@ def _save_results(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Найти сцены-ловушки для Greedy")
+    parser = argparse.ArgumentParser(description="Find scenes where Greedy falls into a trap")
     parser.add_argument("--scene", type=Path, default=Path("scenes/default.yaml"))
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--attempts", type=int, default=50000)

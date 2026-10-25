@@ -6,7 +6,7 @@ from pathlib import Path
 from lodq.ising import qubo_to_ising
 from lodq.metrics import problem_from_scene
 from lodq.qaoa import build_qaoa_circuit, circuit_stats, normalize_operator, transpile_for_aer
-from lodq.qubo import build_qubo
+from lodq.qubo import build_qubo, default_penalties
 from lodq.scene import load_scene
 
 
@@ -18,8 +18,7 @@ def main() -> None:
     args = parser.parse_args()
 
     problem = problem_from_scene(load_scene(args.scene))
-    A = 1.5 * float(problem.v.max())
-    B = 1.2 * float((problem.v - problem.v[:, -1:]).max())
+    A, B = default_penalties(problem.v)
     op, _ = qubo_to_ising(build_qubo(problem.v, problem.dw, problem.dW, A, B))
     cost_op, _ = normalize_operator(op)
 

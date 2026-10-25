@@ -19,7 +19,7 @@ def main() -> None:
     parser.add_argument("--n-starts", type=int, default=5)
     parser.add_argument("--maxiter", type=int, default=300)
     parser.add_argument("--shots", type=int, default=4096)
-    parser.add_argument("--backend", choices=["aer", "statevector"], default="aer")
+    parser.add_argument("--backend", choices=["aer", "statevector", "fastsim"], default="aer")
     parser.add_argument("--root", type=Path, default=Path("runs"))
     args = parser.parse_args()
 

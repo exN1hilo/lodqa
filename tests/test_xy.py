@@ -11,6 +11,7 @@ from qiskit.circuit import Parameter
 from qiskit.quantum_info import Operator, SparsePauliOp, Statevector
 from scipy.linalg import expm
 
+from lodq import fastsim
 from lodq import qaoa as qaoa_module
 from lodq import qubo as qubo_module
 from lodq.classical import dp_solve
@@ -219,9 +220,77 @@ def test_run_xy_qaoa_preserves_one_hot_and_reports_energy(
     assert result.best_expectation == pytest.approx(expected, abs=1e-9, rel=0)
 
 
-def test_run_xy_qaoa_rejects_fast_simulator(xy_qubo: Qubo) -> None:
-    with pytest.raises(ValueError, match="fastsim"):
-        qaoa_module.run_qaoa(xy_qubo, p=1, seed=0, mixer="xy", backend="fastsim")
+def _xy_reference(qubo: Qubo, gammas: np.ndarray, betas: np.ndarray) -> np.ndarray:
+    raw_op, _ = qubo_to_ising(qubo)
+    cost_op, _ = qaoa_module.normalize_operator(raw_op)
+    circuit = qaoa_module.build_qaoa_circuit_xy(cost_op, len(gammas), qubo.N, qubo.M, qubo.K)
+    values = qaoa_module.assemble_values(circuit, gammas, betas)
+    return Statevector.from_instruction(circuit.assign_parameters(values).decompose()).data
+
+
+@pytest.mark.parametrize("N, M, dW, p", [(2, 3, 1, 1), (2, 3, 3, 2), (1, 2, 1, 3), (1, 4, 2, 2)])
+def test_fast_xy_state_matches_qiskit_circuit(N: int, M: int, dW: int, p: int) -> None:
+    rng = np.random.default_rng(N * 100 + M * 10 + p)
+    v = -np.sort(-rng.uniform(0.1, 1.0, (N, M)), axis=1)
+    dw = rng.integers(1, 4, (N, M))
+    dw[:, -1] = 0
+    qubo = build_qubo(v, dw, dW, A=0.0, B=0.8)
+    gammas, betas = rng.uniform(0.0, 1.0, p), rng.uniform(-1.0, 0.0, p)
+    raw_op, const = qubo_to_ising(qubo)
+    _, scale = qaoa_module.normalize_operator(raw_op)
+    sub = (qubo_module.energy(qubo_module.onehot_states(N, M, qubo.K), qubo) - const) / scale
+    fast = fastsim.scatter_onehot(
+        fastsim.qaoa_state_xy(sub, gammas, betas, N, M, qubo.K), N, M, qubo.K
+    )
+    reference = _xy_reference(qubo, gammas, betas)
+    # The constant of the Ising operator only adds a global phase.
+    phase = reference[np.argmax(np.abs(reference))] / fast[np.argmax(np.abs(reference))]
+    assert abs(phase) == pytest.approx(1.0)
+    np.testing.assert_allclose(reference, phase * fast, atol=1e-12, rtol=0)
+
+
+def test_onehot_index_matches_onehot_states() -> None:
+    states = qubo_module.onehot_states(2, 3, 2)
+    index = fastsim.onehot_index(2, 3, 2)
+    bits = ((index[:, None] >> np.arange(8)) & 1).astype(np.int8)
+    np.testing.assert_array_equal(bits, states)
+
+
+@pytest.mark.parametrize("objective", ["energy", "cvar"])
+def test_run_xy_qaoa_on_fast_simulator_matches_statevector(xy_qubo: Qubo, objective: str) -> None:
+    result = qaoa_module.run_qaoa(
+        xy_qubo,
+        p=2,
+        seed=3,
+        n_starts=2,
+        maxiter=80,
+        shots=256,
+        objective=objective,
+        cvar_alpha=0.25,
+        backend="fastsim",
+        mixer="xy",
+    )
+    assert result.mixer == "xy"
+    assert result.backend == "fastsim"
+    assert sum(result.counts.values()) == 256
+    assert all(
+        decode(bits_from_bitstring(bitstring, xy_qubo.n), xy_qubo) is not None
+        for bitstring in result.counts
+    )
+    raw_op, const = qubo_to_ising(xy_qubo)
+    state = Statevector(_xy_reference(xy_qubo, result.gammas, result.betas))
+    expected = float(state.expectation_value(raw_op).real) + const
+    assert result.best_expectation == pytest.approx(expected, abs=1e-9, rel=0)
+
+
+def test_run_xy_qaoa_fast_simulator_accepts_full_energies(xy_qubo: Qubo) -> None:
+    kw = {"p": 1, "seed": 1, "n_starts": 2, "maxiter": 40, "shots": 64}
+    computed = qaoa_module.run_qaoa(xy_qubo, backend="fastsim", mixer="xy", **kw)
+    given = qaoa_module.run_qaoa(
+        xy_qubo, backend="fastsim", mixer="xy", energies=qubo_module.all_energies(xy_qubo), **kw
+    )
+    np.testing.assert_allclose(computed.gammas, given.gammas)
+    assert computed.counts == given.counts
 
 
 def test_run_xy_qaoa_requires_zero_one_hot_penalty() -> None:
