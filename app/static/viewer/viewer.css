@@ -1,0 +1,838 @@
+:host {
+  display: block;
+}
+
+.lv {
+  --lv-ink: #0b0b0b;
+  --lv-ink-2: #52514e;
+  --lv-ink-3: #8a8883;
+  --lv-panel: rgba(252, 252, 251, 0.86);
+  --lv-panel-solid: #fcfcfb;
+  --lv-line: rgba(11, 11, 11, 0.1);
+  --lv-accent: #1c5cab;
+  --lv-accent-ink: #ffffff;
+  --lv-chip: rgba(11, 11, 11, 0.06);
+  --lv-shadow: 0 8px 28px rgba(16, 24, 40, 0.1);
+  position: relative;
+  width: 100%;
+  height: var(--lv-height, 560px);
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid var(--lv-line);
+  background: #f2f2ef;
+  color: var(--lv-ink);
+  font: 13px/1.35 "Source Sans 3", "Source Sans Pro", system-ui, -apple-system, "Segoe UI", sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+}
+
+.lv[data-theme="dark"] {
+  --lv-ink: #f2f2f0;
+  --lv-ink-2: #c3c1bb;
+  --lv-ink-3: #8f8d88;
+  --lv-panel: rgba(28, 31, 36, 0.84);
+  --lv-panel-solid: #1c1f24;
+  --lv-line: rgba(255, 255, 255, 0.12);
+  --lv-accent: #5598e7;
+  --lv-accent-ink: #0b0b0b;
+  --lv-chip: rgba(255, 255, 255, 0.08);
+  --lv-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+  background: #191c21;
+}
+
+/* The explorer covers the page under the app's top bar */
+.lv[data-full="true"] {
+  position: fixed;
+  top: var(--lv-top, 0px);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  z-index: 100;
+}
+
+.lv[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+.lv:focus-visible {
+  box-shadow: 0 0 0 2px var(--lv-accent);
+}
+
+.lv-gl {
+  position: absolute;
+  inset: 0;
+}
+
+.lv-gl canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: grab;
+}
+
+.lv-gl canvas:active {
+  cursor: grabbing;
+}
+
+.lv-panel {
+  position: absolute;
+  background: var(--lv-panel);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--lv-line);
+  border-radius: 12px;
+  box-shadow: var(--lv-shadow);
+  padding: 10px 12px;
+}
+
+.lv-hidden {
+  display: none !important;
+}
+
+/* Loading and errors */
+.lv-status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--lv-ink-2);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.lv-spinner {
+  display: block;
+  width: 22px;
+  height: 22px;
+  margin: 0 auto 10px;
+  border-radius: 50%;
+  border: 2px solid var(--lv-line);
+  border-top-color: var(--lv-accent);
+  animation: lv-spin 0.9s linear infinite;
+}
+
+.lv-spinner.lv-inline {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin: 0 6px -1px 0;
+}
+
+@keyframes lv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Object labels that float above the models */
+.lv-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.lv-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 6px;
+  border-radius: 999px;
+  background: var(--lv-panel);
+  border: 1px solid var(--lv-line);
+  box-shadow: 0 2px 10px rgba(16, 24, 40, 0.08);
+  white-space: nowrap;
+  font-size: 12px;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+
+.lv-label:hover {
+  border-color: var(--lv-accent);
+}
+
+.lv-label b {
+  font-weight: 600;
+}
+
+.lv-label .lv-sub {
+  color: var(--lv-ink-2);
+}
+
+.lv-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.lv-lod {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--lv-chip);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Toolbar */
+.lv-toolbar {
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+}
+
+.lv-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--lv-line);
+  background: transparent;
+  color: var(--lv-ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.lv-btn:hover {
+  background: var(--lv-chip);
+}
+
+.lv-btn:focus-visible {
+  outline: 2px solid var(--lv-accent);
+  outline-offset: 1px;
+}
+
+.lv-btn[aria-pressed="true"] {
+  background: var(--lv-accent);
+  border-color: var(--lv-accent);
+  color: var(--lv-accent-ink);
+}
+
+.lv-btn svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.lv-btn.lv-icon {
+  width: 30px;
+  padding: 0;
+  justify-content: center;
+}
+
+.lv-btn.lv-primary {
+  background: var(--lv-accent);
+  border-color: var(--lv-accent);
+  color: var(--lv-accent-ink);
+  font-weight: 600;
+}
+
+.lv-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Method switch */
+.lv-seg {
+  display: flex;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--lv-chip);
+  gap: 2px;
+}
+
+.lv-seg button {
+  flex: 1;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--lv-ink-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 4px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.lv-seg button[aria-pressed="true"] {
+  background: var(--lv-panel-solid);
+  color: var(--lv-ink);
+  box-shadow: 0 1px 4px rgba(16, 24, 40, 0.12);
+}
+
+.lv-seg button:focus-visible {
+  outline: 2px solid var(--lv-accent);
+}
+
+/* Main panel of the explorer */
+.lv-main {
+  left: 12px;
+  top: 12px;
+  width: 318px;
+  display: grid;
+  gap: 10px;
+}
+
+.lv-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lv-heading strong {
+  font-size: 14px;
+}
+
+.lv-muted {
+  color: var(--lv-ink-2);
+}
+
+.lv-small {
+  font-size: 11.5px;
+}
+
+.lv-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lv-range {
+  width: 100%;
+  accent-color: var(--lv-accent);
+  margin: 2px 0 0;
+}
+
+.lv-bar {
+  position: relative;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--lv-chip);
+  overflow: hidden;
+  display: flex;
+}
+
+.lv-bar > span {
+  height: 100%;
+  border-right: 2px solid var(--lv-panel-solid);
+}
+
+.lv-bar .lv-limit {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--lv-ink);
+  border: 0;
+}
+
+.lv-quality {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.lv-score {
+  border-radius: 8px;
+  background: var(--lv-chip);
+  padding: 5px 6px;
+  text-align: center;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.lv-score[data-active="true"] {
+  border-color: var(--lv-accent);
+}
+
+.lv-score .lv-score-name {
+  display: block;
+  font-size: 10.5px;
+  color: var(--lv-ink-2);
+  white-space: nowrap;
+}
+
+.lv-score .lv-score-value {
+  display: block;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.lv-score .lv-score-note {
+  display: block;
+  font-size: 10px;
+  color: var(--lv-ink-3);
+  white-space: nowrap;
+}
+
+.lv-quantum {
+  display: grid;
+  gap: 6px;
+  border-radius: 10px;
+  padding: 8px;
+  background: var(--lv-chip);
+}
+
+/* Objects list */
+.lv-objects {
+  left: 12px;
+  bottom: 12px;
+  width: 318px;
+  padding: 6px;
+}
+
+.lv-objects table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.lv-objects th {
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--lv-ink-2);
+  padding: 2px 6px 4px;
+}
+
+.lv-objects td {
+  padding: 4px 6px;
+  border-top: 1px solid var(--lv-line);
+  white-space: nowrap;
+}
+
+.lv-objects tr.lv-obj {
+  cursor: pointer;
+}
+
+.lv-objects tr.lv-obj:hover td {
+  background: var(--lv-chip);
+}
+
+.lv-objects tr.lv-obj[data-focused="true"] td {
+  background: var(--lv-chip);
+  font-weight: 600;
+}
+
+.lv-num {
+  text-align: right;
+}
+
+.lv-changed {
+  animation: lv-flash 900ms ease-out;
+}
+
+@keyframes lv-flash {
+  0% {
+    background: rgba(85, 152, 231, 0.45);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+/* Right column: minimap, focus card, QAOA runs */
+.lv-side {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.lv-side > .lv-panel {
+  position: relative;
+  pointer-events: auto;
+}
+
+/* Minimap */
+.lv-minimap {
+  padding: 6px;
+}
+
+.lv-minimap canvas {
+  display: block;
+  width: 190px;
+  height: 190px;
+}
+
+.lv-minimap .lv-caption {
+  font-size: 10.5px;
+  color: var(--lv-ink-2);
+  text-align: center;
+  margin-top: 2px;
+}
+
+/* Path player */
+.lv-player {
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  width: min(420px, calc(100% - 700px));
+  min-width: 300px;
+}
+
+.lv-player .lv-range {
+  flex: 1;
+}
+
+.lv-player .lv-frame {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--lv-ink-2);
+  min-width: 74px;
+  text-align: right;
+}
+
+/* Focus card */
+.lv-focus {
+  width: 210px;
+  display: grid;
+  gap: 6px;
+}
+
+.lv-focus .lv-levels {
+  display: grid;
+  gap: 3px;
+}
+
+.lv-focus .lv-level {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lv-focus .lv-level[data-active="true"] {
+  background: var(--lv-chip);
+  font-weight: 600;
+}
+
+/* Top centre: the explorer's intro above the toasts about LOD changes */
+.lv-top {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  pointer-events: none;
+}
+
+.lv-toasts {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+}
+
+.lv-top > .lv-panel {
+  position: relative;
+  pointer-events: auto;
+}
+
+.lv-intro {
+  width: min(540px, calc(100vw - 720px));
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--lv-ink-2);
+}
+
+.lv-intro strong,
+.lv-intro b {
+  color: var(--lv-ink);
+}
+
+.lv-intro .lv-btn {
+  flex: none;
+  width: 24px;
+  height: 24px;
+}
+
+/* QAOA runs of the explorer */
+.lv-runs {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.lv-runs table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.lv-runs th {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--lv-ink-2);
+  text-align: left;
+  padding: 2px 5px;
+}
+
+.lv-runs td {
+  padding: 3px 5px;
+  border-top: 1px solid var(--lv-line);
+  white-space: nowrap;
+}
+
+.lv-runs .lv-num {
+  text-align: right;
+}
+
+/* Scene choice of the explorer */
+.lv-select {
+  flex: 1;
+  max-width: 200px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--lv-ink);
+  background: var(--lv-chip);
+  border: 1px solid var(--lv-line);
+  border-radius: 8px;
+  padding: 4px 6px;
+}
+
+.lv-toast {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--lv-panel-solid);
+  border: 1px solid var(--lv-line);
+  box-shadow: var(--lv-shadow);
+  font-size: 12.5px;
+  white-space: nowrap;
+  animation: lv-toast 2600ms ease forwards;
+}
+
+@keyframes lv-toast {
+  0% {
+    opacity: 0;
+  }
+  12%,
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+kbd {
+  display: inline-block;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1px solid var(--lv-line);
+  background: var(--lv-chip);
+  font: 600 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: center;
+}
+
+/* Orbit mode: plan switch and legend */
+.lv-legend {
+  left: 12px;
+  top: 12px;
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  width: 340px;
+}
+
+.lv-legend .lv-seg button[data-missing="true"] {
+  opacity: 0.55;
+}
+
+.lv-legend .lv-frame-text,
+.lv-legend .lv-orbit-note {
+  padding: 0 2px;
+}
+
+.lv-legend .lv-keys {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 0 2px;
+}
+
+.lv-legend .lv-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+
+/* Guided tour: the player and its narration */
+.lv-tour {
+  left: 12px;
+  bottom: 12px;
+  width: min(660px, calc(100% - 340px));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.lv[data-tour="idle"] .lv-tour {
+  width: auto;
+  padding: 6px;
+}
+
+.lv[data-tour="idle"] .lv-tour-body {
+  display: none;
+}
+
+.lv-btn.lv-tour-play {
+  flex: none;
+  height: 38px;
+  padding: 0 16px 0 13px;
+  border-radius: 999px;
+  font-size: 13.5px;
+}
+
+.lv-tour-play svg {
+  width: 14px;
+  height: 14px;
+}
+
+.lv[data-tour="playing"] .lv-btn.lv-tour-play {
+  background: transparent;
+  color: var(--lv-ink);
+  border-color: var(--lv-line);
+}
+
+.lv-tour-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.lv-tour-text {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--lv-ink-2);
+}
+
+.lv-tour-text strong {
+  color: var(--lv-ink);
+  margin-right: 2px;
+}
+
+.lv-tour-text b {
+  color: var(--lv-ink);
+}
+
+.lv-tour-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--lv-chip);
+  overflow: hidden;
+}
+
+.lv-tour-track span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--lv-accent);
+}
+
+/* The pointer the tour moves to what it clicks */
+.lv-cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 26px;
+  height: 26px;
+  margin: -2px 0 0 -4px;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
+  transition:
+    transform 650ms cubic-bezier(0.3, 0.7, 0.2, 1),
+    opacity 200ms ease;
+}
+
+.lv-cursor.lv-cursor-off {
+  opacity: 0;
+}
+
+.lv-cursor svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+@media (max-width: 1000px) {
+  .lv-intro {
+    display: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .lv-objects,
+  .lv-minimap,
+  .lv-focus,
+  .lv-runs {
+    display: none;
+  }
+  .lv-main {
+    width: calc(100% - 24px);
+  }
+  .lv-player,
+  .lv-tour {
+    width: calc(100% - 24px);
+    min-width: 0;
+    bottom: 56px;
+  }
+  .lv-legend {
+    width: calc(100% - 24px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lv-toast,
+  .lv-changed {
+    animation-duration: 1ms;
+  }
+  .lv-cursor {
+    transition: opacity 200ms ease;
+  }
+}

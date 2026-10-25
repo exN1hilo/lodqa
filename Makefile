@@ -38,7 +38,7 @@ render:
 	$(call timed,uv run python -m lodq.render)
 
 precompute:
-	uv run python scripts/precompute_path.py
+	uv run python scripts/precompute_path.py --exact
 
 demo:
 	uv run streamlit run app/streamlit_app.py

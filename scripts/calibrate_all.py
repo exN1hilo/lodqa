@@ -9,7 +9,7 @@ from lodq.storage import save_run
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Откалибровать штрафы для всех YAML-сцен")
+    parser = argparse.ArgumentParser(description="Calibrate penalties for every YAML scene")
     parser.add_argument("--scenes-dir", type=Path, default=Path("scenes"))
     parser.add_argument("--runs-root", type=Path, default=Path("runs"))
     parser.add_argument("--cache-dir", type=Path, default=Path("cache"))
@@ -17,7 +17,7 @@ def main() -> None:
 
     paths = sorted(args.scenes_dir.glob("*.yaml"))
     if not paths:
-        parser.error(f"В {args.scenes_dir} не найдено YAML-сцен")
+        parser.error(f"no YAML scenes found in {args.scenes_dir}")
 
     rows = []
     for path in paths:

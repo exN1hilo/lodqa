@@ -36,5 +36,5 @@ target-version = "py312"
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 markers = [
-    "slow: полный перебор и калибровка случайных сцен",
+    "slow: full enumeration and penalty calibration of random scenes",
 ]

@@ -11,12 +11,14 @@ from lodq.fastsim import (
     probabilities,
     qaoa_state,
     save_landscape,
+    sorted_cvar,
 )
 from lodq.ising import ising_diagonal, qubo_to_ising
 from lodq.metrics import problem_from_scene
 from lodq.qaoa import (
     assemble_values,
     build_qaoa_circuit,
+    cvar,
     expectation_fn,
     linear_ramp_init,
     make_estimator,
@@ -280,5 +282,42 @@ def test_run_qaoa_fastsim_rejects_bad_input() -> None:
     qubo = _toy_qubo()
     with pytest.raises(ValueError, match="energies must have shape"):
         run_qaoa(qubo, p=1, seed=0, backend="fastsim", energies=np.zeros(3))
-    with pytest.raises(ValueError, match="objective='energy'"):
-        run_qaoa(qubo, p=1, seed=0, backend="fastsim", objective="cvar")
+    with pytest.raises(ValueError, match="cvar_alpha"):
+        run_qaoa(qubo, p=1, seed=0, backend="fastsim", objective="cvar", cvar_alpha=0.0)
+
+
+def test_run_qaoa_fastsim_cvar_reports_energy_expectation() -> None:
+    qubo = _toy_qubo()
+    energies = all_energies(qubo)
+    result = run_qaoa(
+        qubo,
+        p=1,
+        seed=0,
+        n_starts=2,
+        maxiter=60,
+        shots=64,
+        backend="fastsim",
+        objective="cvar",
+        cvar_alpha=0.25,
+    )
+    _, const = qubo_to_ising(qubo)
+    scale = result.scale
+    probs = probabilities(
+        qaoa_state((energies - const) / scale, result.gammas, result.betas, qubo.n)
+    )
+    assert result.objective == "cvar"
+    assert result.cvar_alpha == 0.25
+    assert result.best_expectation == pytest.approx(float(probs @ energies), abs=1e-9)
+    assert min(result.energy_history) == pytest.approx(cvar(energies, probs, 0.25), abs=1e-9)
+
+
+def test_sorted_cvar_matches_cvar() -> None:
+    rng = np.random.default_rng(5)
+    energies = rng.normal(size=40)
+    probs = rng.random(40)
+    probs /= probs.sum()
+    order = np.argsort(energies)
+    for alpha in (0.05, 0.3, 1.0):
+        assert sorted_cvar(energies[order], probs[order], alpha) == pytest.approx(
+            cvar(energies, probs, alpha)
+        )

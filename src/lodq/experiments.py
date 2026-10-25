@@ -12,7 +12,7 @@ import pandas as pd
 from lodq.classical import dp_solve, greedy_solve
 from lodq.config import ExperimentConfig, dump_config, load_config
 from lodq.evaluate import evaluate_counts, evaluate_probabilities, p_opt_random, random_baseline
-from lodq.fastsim import probabilities, qaoa_state
+from lodq.fastsim import exact_distribution
 from lodq.ising import qubo_to_ising
 from lodq.metrics import problem_from_scene
 from lodq.qaoa import (
@@ -29,12 +29,12 @@ from lodq.qaoa import (
 )
 from lodq.qubo import (
     Qubo,
-    all_energies,
     build_qubo,
     cache_energies,
     calibrate_penalties,
     energies_cache_path,
     load_energies,
+    verify_qubo,
 )
 from lodq.scene import load_scene
 from lodq.storage import load_runs, run_exists, runs_to_dataframe, save_run
@@ -46,7 +46,11 @@ def _penalties(name: str, problem: Any, cfg: ExperimentConfig, dp: Any) -> tuple
     path = Path("cache") / f"{name}_penalties.json"
     if auto_a and auto_b and path.is_file():
         saved = json.loads(path.read_text(encoding="utf-8"))
-        return float(saved["A"]), float(saved["B"])
+        penalty_a, penalty_b = float(saved["A"]), float(saved["B"])
+        # The cache is keyed by scene name only, so a changed scene must not reuse it blindly.
+        qubo = build_qubo(problem.v, problem.dw, problem.dW, penalty_a, penalty_b)
+        if verify_qubo(qubo, problem.v, problem.dw, dp).ok:
+            return penalty_a, penalty_b
     if auto_a or auto_b:
         penalty_a, penalty_b, _report = calibrate_penalties(problem.v, problem.dw, problem.dW, dp)
     else:
@@ -144,14 +148,12 @@ def _save_result(
     metrics = evaluate_counts(result.counts, qubo, problem.v, problem.dw, prep["dp"], baseline)
     metrics_exact = None
     if cfg.backend == "fastsim":
-        energies = prep["energies"] if qubo is prep["qubo"] else all_energies(qubo)
-        state = qaoa_state(energies / result.scale, result.gammas, result.betas, qubo.n)
-        distribution = probabilities(state)
+        energies = prep["energies"] if qubo is prep["qubo"] else None
+        distribution = exact_distribution(qubo, result, energies)
         metrics_exact = evaluate_probabilities(
             distribution, qubo, problem.v, problem.dw, prep["dp"], baseline
         ).to_dict()
     payload = result.to_dict()
-    payload["mixer"] = mixer
     save_run(
         {
             "config": dump_config(cfg),
@@ -216,7 +218,7 @@ def run_scene(prep: dict[str, Any], cfg: ExperimentConfig, runs_root: str) -> No
     """Sweep mixers, seeds, and p, skipping combinations that are already stored."""
     for mixer in cfg.mixers:
         qubo = _qubo_for_mixer(prep, mixer)
-        kwargs = _sweep_kwargs(cfg)
+        kwargs = _sweep_kwargs(cfg) | {"mixer": mixer}
         if cfg.backend == "fastsim" and qubo is prep["qubo"]:
             kwargs["energies"] = prep["energies"]
         for seed in cfg.seeds:

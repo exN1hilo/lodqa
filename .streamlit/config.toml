@@ -1,0 +1,20 @@
+[server]
+# The 3D viewer loads three.js, its own code and the LOD meshes from app/static.
+enableStaticServing = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+# Hides the Deploy button and the developer entries of the app menu.
+toolbarMode = "minimal"
+
+[theme]
+base = "dark"
+primaryColor = "#5598e7"
+backgroundColor = "#0f1115"
+secondaryBackgroundColor = "#1a1c21"
+textColor = "#f0efec"
+borderColor = "#2c2f36"
+showWidgetBorder = true
+baseRadius = "medium"

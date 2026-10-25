@@ -143,7 +143,7 @@ def test_verify_qubo_uses_supplied_energies(
     expected = verify_qubo(qubo, v, dw, solution, energies=energies)
 
     def fail_if_recomputed(qubo: Qubo) -> np.ndarray:
-        pytest.fail("Переданные энергии не должны вычисляться повторно")
+        pytest.fail("given energies must not be computed again")
 
     monkeypatch.setattr(qubo_module, "all_energies", fail_if_recomputed)
     assert verify_qubo(qubo, v, dw, solution, energies=energies) == expected

@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_doc_rule_is_unsafe(trap: Problem) -> None:
-    """Фиксирует запрет правила Δv/Δw: основное состояние превышает бюджет."""
+    """The Δv/Δw rule is unsafe: its ground state goes over the budget."""
     dv = trap.v - trap.v[:, -1:]
     upgrades = trap.dw > 0
     B = 1.2 * float(np.max(dv[upgrades] / trap.dw[upgrades]))

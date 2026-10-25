@@ -86,7 +86,7 @@ def test_load_lod_mesh_sphere_resolution_is_at_least_eight() -> None:
     assert result.n_cells == 96
 
 
-@pytest.mark.parametrize("budget, budget_text", [(5000, "5 000"), (3000, "3 000")])
+@pytest.mark.parametrize("budget, budget_text", [(5000, "5,000"), (3000, "3,000")])
 def test_render_solution_draws_lods_and_annotates_real_triangle_budget(
     budget: int, budget_text: str
 ) -> None:
@@ -122,10 +122,10 @@ def test_render_solution_draws_lods_and_annotates_real_triangle_budget(
             actor for actor in plotter.actors.values() if isinstance(actor, pv.CornerAnnotation)
         ]
         assert any(actor.get_text(actor.UpperEdge) == "Greedy" for actor in annotations)
-        expected_percent = "76 %" if budget == 5000 else "127 %"
+        expected_percent = "76%" if budget == 5000 else "127%"
         assert any(
-            f"Бюджет: 3 800 / {budget_text} треугольников ({expected_percent})\n"
-            "Качество: V / V_DP = 0.88" == actor.get_text(actor.LowerLeft)
+            f"Budget: 3,800 / {budget_text} triangles ({expected_percent})\n"
+            "Quality: V / V_DP = 0.88" == actor.get_text(actor.LowerLeft)
             for actor in annotations
         )
         legend = plotter.legend
@@ -163,7 +163,7 @@ def test_render_solution_handles_empty_scene_and_zero_budget() -> None:
         render.render_solution(plotter, scene, (), "Empty", 0.0)
 
         assert any(
-            "Бюджет: 0 / 0 треугольников (0 %)" in (actor.get_text(actor.LowerLeft) or "")
+            "Budget: 0 / 0 triangles (0%)" in (actor.get_text(actor.LowerLeft) or "")
             for actor in plotter.actors.values()
             if isinstance(actor, pv.CornerAnnotation)
         )

@@ -116,7 +116,7 @@ def bitstring_from_bits(bits: np.ndarray) -> str:
 
 def all_energies(qubo: Qubo, chunk: int = 65536) -> np.ndarray:
     if chunk <= 0:
-        raise ValueError("chunk должен быть больше 0")
+        raise ValueError("chunk must be greater than 0")
     n = qubo.n
     total = 1 << n
     result = np.empty(total, dtype=np.float64)
@@ -169,11 +169,11 @@ def verify_qubo(
     energies: np.ndarray | None = None,
 ) -> VerifyReport:
     if np.shape(v) != (qubo.N, qubo.M) or np.shape(dw) != (qubo.N, qubo.M):
-        raise ValueError("v и dw должны иметь форму (N, M), соответствующую QUBO")
+        raise ValueError("v and dw must have the shape (N, M) of the QUBO")
     values = np.asarray(all_energies(qubo) if energies is None else energies, dtype=np.float64)
     total = 1 << qubo.n
     if values.shape != (total,):
-        raise ValueError(f"energies должен быть одномерным массивом длины {total}")
+        raise ValueError(f"energies must be a 1-D array of length {total}")
 
     indices = np.arange(total, dtype=np.int64)
     bits = ((indices[:, None] >> np.arange(qubo.n)) & 1).astype(np.int8)
@@ -214,9 +214,9 @@ def verify_qubo(
 
 
 def default_penalties(v: np.ndarray) -> tuple[float, float]:
-    """Нарушение бюджета на 1 блок штрафуется лишь на B, поэтому B должен
-    превышать наибольший выигрыш одного апгрейда относительно самого грубого LOD.
-    Правило B ≈ 1.2·max(Δv/Δw) небезопасно. Штрафы проверяются полным перебором.
+    """Going over the budget by one block costs only B, so B must exceed the largest gain
+    of a single upgrade over the coarsest LOD. The rule B ≈ 1.2·max(Δv/Δw) is not safe.
+    The penalties are checked by full enumeration.
     """
     utility = np.asarray(v, dtype=np.float64)
     A = float(1.5 * utility.max())
@@ -251,13 +251,13 @@ def calibrate_penalties(
     if verbose:
         print(table)
     if best is None:
-        raise RuntimeError(f"Не удалось подобрать штрафы:\n{table}")
+        raise RuntimeError(f"no penalties on the grid pass verification:\n{table}")
     return best
 
 
 def onehot_states(N: int, M: int, K: int) -> np.ndarray:
     if N < 0 or M < 1 or K < 0:
-        raise ValueError("N и K должны быть >= 0, M должен быть >= 1")
+        raise ValueError("N and K must be >= 0, M must be >= 1")
     n_choices = M**N
     n_slack_states = 1 << K
     choices = np.array(list(product(range(M), repeat=N)), dtype=np.intp).reshape(n_choices, N)
@@ -277,7 +277,7 @@ def verify_qubo_onehot(
     delta: float = 0.02,
 ) -> VerifyReport:
     if np.shape(v) != (qubo.N, qubo.M) or np.shape(dw) != (qubo.N, qubo.M):
-        raise ValueError("v и dw должны иметь форму (N, M), соответствующую QUBO")
+        raise ValueError("v and dw must have the shape (N, M) of the QUBO")
     states = onehot_states(qubo.N, qubo.M, qubo.K)
     values = energy(states, qubo)
     blocks = states[:, : qubo.N * qubo.M].reshape(len(states), qubo.N, qubo.M)
@@ -331,5 +331,7 @@ def calibrate_penalty_B_onehot(
             best = (B, report)
     if best is None:
         table = "\n".join(rows)
-        raise RuntimeError(f"Не удалось подобрать B в one-hot подпространстве:\n{table}")
+        raise RuntimeError(
+            f"no B on the grid passes verification in the one-hot subspace:\n{table}"
+        )
     return best

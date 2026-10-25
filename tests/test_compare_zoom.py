@@ -86,7 +86,7 @@ def test_compare_zoom_selects_largest_lod_difference_then_nearest_object(
         np.testing.assert_allclose(distances, radius, atol=1e-6, rtol=0)
         assert panel["colors"][0] == pytest.approx(pv.Color(render.LOD_COLORS[j]).float_rgb)
         assert panel["edges"] == [True]
-        assert f"{method}: LOD{j}, {count} треугольников" in panel["text"]
+        assert f"{method}: LOD{j}, {count} triangles" in panel["text"]
         assert panel["target"] == pytest.approx(center)
         assert panel["position"] == pytest.approx(camera_position)
         assert np.linalg.norm(np.asarray(panel["position"]) - center) == pytest.approx(3 * radius)
@@ -121,7 +121,7 @@ def test_compare_zoom_handles_matching_solutions_and_degenerate_view_directions(
     assert len(captured_zoom) == 2
     for panel, method in zip(captured_zoom, ("Greedy", "DP"), strict=True):
         assert len(panel["points"]) == 1
-        assert f"{method}: LOD0, 300 треугольников" in panel["text"]
+        assert f"{method}: LOD0, 300 triangles" in panel["text"]
         assert panel["position"] == pytest.approx(zoom_camera)
         assert panel["target"] == pytest.approx((2, 3, 4))
         assert panel["up"] == pytest.approx(up)

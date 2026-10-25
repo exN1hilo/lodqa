@@ -135,7 +135,7 @@ def test_compare_render_without_runs_draws_no_data_panel(
 
     assert out.is_file()
     assert len(captured_panels) == 3
-    assert "QAOA: нет данных" in captured_panels[1]["text"]
+    assert "QAOA: no data" in captured_panels[1]["text"]
     assert captured_panels[1]["colors"] == []
     assert len(captured_panels[0]["colors"]) == len(captured_panels[2]["colors"]) == 2
 
@@ -154,7 +154,7 @@ def test_compare_render_without_feasible_shots_keeps_qaoa_panel_empty(
 
     assert captured_panels[1]["colors"] == []
     assert any("seed=7" in text for text in captured_panels[1]["text"])
-    assert any("Нет допустимых сэмплов" in text for text in captured_panels[1]["text"])
+    assert any("No feasible samples" in text for text in captured_panels[1]["text"])
 
 
 @pytest.mark.parametrize("xvfb_present", [False, True])

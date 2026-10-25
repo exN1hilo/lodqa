@@ -4,13 +4,12 @@ Choosing a level of detail (LOD) for each object in a 3D scene under a hard per-
 triangle budget, written as a QUBO and solved with QAOA (Qiskit), then compared honestly
 with exact dynamic programming, a greedy baseline and random sampling.
 
-![DP, Greedy and QAOA choices rendered side by side](figures/compare_render.png)
-
 ## Results
 
 <!-- RESULTS:START -->
 
-_No results yet. Generate the table with `uv run python scripts/results_table.py --write-readme`._
+_No results yet. Run `make experiments`, then
+`uv run python scripts/results_table.py --write-readme` to fill this table._
 
 <!-- RESULTS:END -->
 
@@ -18,7 +17,8 @@ AR top-1 is the value of the most frequent feasible sample divided by the DP opt
 P_feas is the fraction of shots that are one-hot and within budget. Budget use is the
 budget used by the best feasible sample divided by the available budget. P_opt gain is
 the probability of sampling the DP optimum divided by its probability under uniform
-sampling.
+sampling. DP and Greedy are deterministic, so their P_opt gain is 1 / P_opt(uniform)
+when they return the DP choice and 0 when they do not.
 
 ## Method
 
@@ -42,6 +42,16 @@ The remaining weights and budget are counted in blocks of 5000 triangles:
 
 Rounding the weights up and the budget down means that every choice the model accepts
 also fits the real triangle budget.
+
+**Baselines.** DP solves the MCKP exactly and is the reference. Greedy starts from the
+coarsest LOD everywhere and keeps applying the upgrade with the best utility gain per
+budget block. Random is the exact uniform distribution over all 2<sup>19</sup> bitstrings,
+the same baseline that P_opt gain is measured against.
+
+**Scenes.** `scenes/default.yaml` is the base scene. `greedy_trap_1..3` were found
+with `scripts/find_greedy_trap.py`: there Greedy stops with budget it cannot use and
+misses the optimum, so it is a fair test for QAOA. `random_000..019` are random scenes
+for `configs/main_random.yaml`.
 
 **QUBO.** Binary x<sub>ij</sub> = 1 means object i uses LOD j. The inequality is turned
 into an equality with K = ⌊log<sub>2</sub> dW⌋ + 1 slack bits s<sub>k</sub> of weight 2<sup>k</sup>.
@@ -73,14 +83,71 @@ statevector (`fastsim`), and the final counts are sampled with Qiskit Aer.
 
 ## Quickstart
 
-Requires [uv](https://docs.astral.sh/uv/). Python 3.12 is installed by uv.
+Requires uv. Python 3.12 is installed by uv.
 
 ```bash
-uv sync && make all QUICK=1   # install, test, build assets, quick experiments, figures, renders
-make demo                     # interactive Streamlit demo
+make all QUICK=1   # install, test, build assets, quick experiments, figures, renders
+make precompute    # DP, Greedy, QAOA (X and XY mixers) for every camera frame, ~9 min
+make demo          # interactive Streamlit demo
 ```
 
-`make all` without `QUICK=1` runs the full grid from `configs/main.yaml`.
+`make all` without `QUICK=1` runs the full grid from `configs/main.yaml`: the three
+greedy trap scenes, p = 1..4, X and XY mixers, 5 seeds each.
+
+The demo reads its camera frames from `cache/path`, so run `make precompute` once before
+`make demo`. Add `--limit 10` to `scripts/precompute_path.py` for a quick try on the
+first 10 frames.
+
+Without uv, every target is the same command run with the virtualenv's Python:
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/pip install -e . pytest ruff
+.venv/bin/python -m pytest -q
+.venv/bin/python scripts/precompute_path.py --exact
+.venv/bin/python -m streamlit run app/streamlit_app.py
+```
+
+### Make targets
+
+| Target | What it does |
+|---|---|
+| `make install` | `uv sync` |
+| `make test` | The full test suite; `uv run pytest -m "not slow"` skips the 2^19 enumerations of random scenes |
+| `make lint` | `ruff check src tests` |
+| `make assets` | Rebuilds the LOD meshes in `assets/lods/` (they are committed) |
+| `make experiments` | Experiment grid from `configs/main.yaml` (or `configs/smoke.yaml` with `QUICK=1`) into `runs/` and `runs/summary.csv` |
+| `make figures` | Figures in `figures/` from the saved runs |
+| `make render` | `figures/compare_render.png` and `figures/compare_zoom.png` with PyVista |
+| `make precompute` | Camera frames for the demo in `cache/path` |
+| `make demo` | Streamlit demo |
+| `make all` | `install`, `test`, `assets`, `experiments`, `figures` and `render` |
+
+`scripts/check_release.py` checks that the figures are newer than `runs/summary.csv` and
+that this README has its results block.
+
+### Demo
+
+The demo has four pages:
+
+- **Overview**: one camera frame as a large 3D view. **Play** flies to every model, shows
+  its triangles and clicks through the four plans, then sums up the frame in words. Below
+  the view: the scene, camera frame and budget controls, the detail table, the triangle
+  budget and a map from above.
+- **3D explorer**: you fly the game camera through the scene in WebGL (three.js); the
+  browser re-solves DP and Greedy on every move and swaps each model's mesh to its LOD.
+  Click a model to fly to it. QAOA can be run for any view you stop at.
+- **Quantum lab**: live QAOA on the simulator, X against XY mixer, depth and objective.
+- **How it works**: the formulation on one page.
+
+The 3D views need a browser with WebGL. On the first start the app writes the viewer
+meshes to `app/static/meshes/`. Environment variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LODQ_FRAMES_DIR` | `cache/path` | Precomputed camera frames |
+| `LODQ_MESH_DIR` | `app/static/meshes` | Where the viewer meshes are written |
+| `LODQ_LIVE_BACKEND` | `fastsim` | Simulator for live QAOA runs |
 
 ## Repository layout
 
@@ -93,7 +160,7 @@ make demo                     # interactive Streamlit demo
 | `src/lodq/qubo.py` | QUBO construction, encoding and decoding, penalty rules, full 2^n verification |
 | `src/lodq/ising.py` | QUBO → Ising (`SparsePauliOp`) mapping and its diagonal |
 | `src/lodq/qaoa.py` | QAOA circuits (X and XY mixers), angle initialisation, optimisation and sampling |
-| `src/lodq/fastsim.py` | Exact numpy QAOA statevector, fast optimiser and the p = 1 landscape |
+| `src/lodq/fastsim.py` | Exact numpy QAOA statevector (X mixer, and XY on the one-hot subspace), fast optimiser and the p = 1 landscape |
 | `src/lodq/evaluate.py` | Sample and distribution metrics (AR, P_feas, P_opt gain) and the uniform baseline |
 | `src/lodq/experiments.py` | Command-line runner for the experiment grid and `runs/summary.csv` |
 | `src/lodq/storage.py` | Saving and loading run records under `runs/` |
@@ -101,6 +168,18 @@ make demo                     # interactive Streamlit demo
 | `src/lodq/plots.py` | Figures rebuilt from saved runs |
 | `src/lodq/render.py` | 3D renders of the chosen LODs with PyVista |
 | `src/lodq/demo.py` | Data and figures for the Streamlit demo in `app/` |
+| `src/lodq/viewer.py` | LOD meshes and scene data for the WebGL viewer in `app/static/viewer/` |
+
+| Folder | Contents |
+|---|---|
+| `app/` | Streamlit entry point `streamlit_app.py`, shared UI code `ui.py`, one module per page in `views/` |
+| `app/static/` | WebGL viewer (`viewer/`) and the vendored three.js (`vendor/`) |
+| `scripts/` | One-off tools: penalty calibration, greedy trap search, random scenes, QAOA sweeps, mixer comparison, circuit report, demo precompute, results table, release check |
+| `configs/` | Experiment grids: `smoke.yaml`, `main.yaml`, `main_random.yaml` |
+| `scenes/` | Scene presets and the demo camera path `greedy_trap_path.json` |
+| `assets/lods/` | LOD meshes (`.ply`) |
+| `tests/` | pytest suite |
+| `runs/`, `cache/`, `figures/` | Generated results, energy and frame caches, figures (not committed) |
 
 ## Limitations
 
@@ -112,10 +191,17 @@ make demo                     # interactive Streamlit demo
 - **Noiseless simulation only.** All results come from a noise-free simulator. Real
   hardware noise and the depth of the transpiled circuit would lower the quality.
 
+## Credits
+
+- The models are PyVista example datasets: the bunny, dragon, armadillo and Lucy from the
+  Stanford 3D Scanning Repository, and the Utah teapot.
+- three.js is vendored in `app/static/vendor/` under the MIT
+  licence (`LICENSE-three.txt`).
+
 ## Team
 
 - Volodymyr Cherevko
 - Ruslan Murha
 - Artem Bondarenko
-- kolodoschi-two
-- _TODO: name of the contributor committing as iceice_
+- Yaroslau Hatalski
+- Nykyta Hniedoi

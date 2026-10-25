@@ -24,7 +24,7 @@ from qiskit_aer.primitives import SamplerV2 as AerSamplerV2
 from scipy.optimize import minimize
 
 from lodq.ising import qubo_to_ising
-from lodq.qubo import Qubo, all_energies, bits_from_bitstring, energy
+from lodq.qubo import Qubo, all_energies, bits_from_bitstring, energy, onehot_states
 from lodq.storage import save_run
 
 PARAM_RE = re.compile(r"(?P<kind>[γβ])\[(?P<index>\d+)\]")
@@ -400,22 +400,15 @@ def run_qaoa(
 
     backend='fastsim' optimizes the exact <H_C> from the numpy statevector in lodq.fastsim
     and samples the final counts with Aer. energies (all 2^n QUBO energies, e.g. from the
-    cache) is used only there; without it they are computed with all_energies.
+    cache) is used only there; without it they are computed with all_energies. With
+    mixer='xy' fastsim works on the one-hot subspace and only needs its M^N · 2^K energies.
     """
     if objective not in OBJECTIVES:
         raise ValueError(f"unknown objective {objective!r}: expected one of {OBJECTIVES}")
     if mixer not in ("x", "xy"):
         raise ValueError(f"unknown mixer {mixer!r}: expected 'x' or 'xy'")
-    if mixer == "xy":
-        if backend == "fastsim":
-            raise ValueError(
-                "backend='fastsim' не поддерживает mixer='xy'; "
-                "используйте backend='aer' или 'statevector'"
-            )
-        if qubo.A != 0:
-            raise ValueError("Для mixer='xy' нужен QUBO с A=0, без штрафа one-hot")
-    if backend == "fastsim" and objective != "energy":
-        raise ValueError(f"backend='fastsim' supports only objective='energy', got {objective!r}")
+    if mixer == "xy" and qubo.A != 0:
+        raise ValueError("mixer='xy' needs a QUBO with A=0, without the one-hot penalty")
     start = time.perf_counter()
     op, const = qubo_to_ising(qubo)
     cost_op, scale = normalize_operator(op)
@@ -426,15 +419,29 @@ def run_qaoa(
     measured_t = measure_for_aer(circuit, seed)
 
     if backend == "fastsim":
-        from lodq.fastsim import _optimize_fast  # fastsim imports this module
+        # fastsim imports this module
+        from lodq.fastsim import _optimize_fast, expectation, fast_state, onehot_index
 
-        values = all_energies(qubo) if energies is None else np.asarray(energies, np.float64)
-        if values.shape != (1 << qubo.n,):
-            raise ValueError(f"energies must have shape ({1 << qubo.n},), got {values.shape}")
+        if energies is not None:
+            values = np.asarray(energies, np.float64)
+            if values.shape != (1 << qubo.n,):
+                raise ValueError(f"energies must have shape ({1 << qubo.n},), got {values.shape}")
+        xy = (qubo.N, qubo.M, qubo.K) if mixer == "xy" else None
+        if xy is None:
+            values = all_energies(qubo) if energies is None else values
+        elif energies is None:
+            values = energy(onehot_states(*xy), qubo)
+        else:
+            values = values[onehot_index(*xy)]
+        scaled = (values - const) / scale
+        alpha = cvar_alpha if objective == "cvar" else None
         gammas, betas, best_value, scaled_history, n_evals = _optimize_fast(
-            (values - const) / scale, qubo.n, p, seed, n_starts, maxiter, warm_start
+            scaled, qubo.n, p, seed, n_starts, maxiter, warm_start, xy, alpha
         )
+        # CVaR is affine in the energy, so the same map converts both objectives to QUBO units.
         history = [scale * value + const for value in scaled_history]
+        if alpha is not None:
+            best_value = expectation(fast_state(scaled, gammas, betas, qubo.n, xy), scaled)
         best_expectation = scale * best_value + const
         sampler = make_sampler("aer", seed=seed)
     else:
@@ -518,7 +525,7 @@ def toy_problem() -> tuple[np.ndarray, np.ndarray, int]:
 
 def w_state_circuit(n_objects: int, n_lods: int, n_slack: int) -> QuantumCircuit:
     if n_objects < 0 or n_lods < 1 or n_slack < 0:
-        raise ValueError("n_objects и n_slack должны быть >= 0, n_lods должен быть >= 1")
+        raise ValueError("n_objects and n_slack must be >= 0, n_lods must be >= 1")
     n = n_objects * n_lods + n_slack
     circuit = QuantumCircuit(n)
     amplitudes = np.zeros(1 << n_lods, dtype=np.complex128)
@@ -539,10 +546,10 @@ def xy_mixer_layer(
     n_slack: int,
 ) -> None:
     if n_objects < 0 or n_lods < 1 or n_slack < 0:
-        raise ValueError("n_objects и n_slack должны быть >= 0, n_lods должен быть >= 1")
+        raise ValueError("n_objects and n_slack must be >= 0, n_lods must be >= 1")
     n = n_objects * n_lods + n_slack
     if circuit.num_qubits < n:
-        raise ValueError(f"В схеме должно быть не меньше {n} кубитов")
+        raise ValueError(f"the circuit must have at least {n} qubits")
 
     pairs = list(pairwise(range(n_lods)))
     if n_lods > 2:
@@ -568,7 +575,7 @@ def build_qaoa_circuit_xy(
     beta = ParameterVector("β", p)
     circuit = w_state_circuit(n_objects, n_lods, n_slack)
     if cost_op.num_qubits != circuit.num_qubits:
-        raise ValueError("Число кубитов cost_op должно совпадать с размером XY-схемы")
+        raise ValueError("cost_op must act on as many qubits as the XY circuit has")
     for k in range(p):
         circuit.append(PauliEvolutionGate(cost_op, time=gamma[k]), range(circuit.num_qubits))
         xy_mixer_layer(circuit, beta[k], n_objects, n_lods, n_slack)
