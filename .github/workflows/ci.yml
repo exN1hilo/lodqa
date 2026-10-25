@@ -24,7 +24,7 @@ jobs:
           sudo apt-get install -y xvfb libgl1
 
       - name: Tests
-        run: uv run pytest -q
+        run: xvfb-run -a uv run pytest -q
 
       - name: Quick pipeline
         run: xvfb-run -a make all QUICK=1
