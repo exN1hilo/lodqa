@@ -168,7 +168,7 @@ def test_compare_render_continues_without_xvfb_on_headless_linux(
         raise OSError("Xvfb is unavailable")
 
     monkeypatch.setattr(render, "sys", SimpleNamespace(platform="linux"))
-    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setattr(render, "os", SimpleNamespace(environ={}))
     if xvfb_present:
         monkeypatch.setattr(pv, "start_xvfb", unavailable_xvfb, raising=False)
     else:
